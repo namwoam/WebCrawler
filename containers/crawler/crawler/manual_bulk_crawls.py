@@ -38,6 +38,7 @@ class ManualBulkCrawlConsumer:
         self.retry_after = {}
         self.closed = False
         self.filling = False
+        self.queue_exhausted = False
         self.poller = LoopingCall(self.poll)
 
     def start(self):
@@ -55,6 +56,9 @@ class ManualBulkCrawlConsumer:
     def poll(self):
         if self.closed:
             return
+        # Discover newly submitted or released jobs once per poll. An empty
+        # scan otherwise gets repeated by every outstanding URL callback.
+        self.queue_exhausted = False
         # Keep only completed portions whose jobs are still waiting on other
         # crawlers. Avoid reloading their URL metadata on every completion.
         try:
@@ -80,7 +84,7 @@ class ManualBulkCrawlConsumer:
                               if job.pending and not job.failed
                               and job.batch.path.exists() and not is_expired(job.batch.payload)), None)
                 if ready is None:
-                    if len(self.jobs) >= self.max_active_jobs:
+                    if self.queue_exhausted or len(self.jobs) >= self.max_active_jobs:
                         break
                     try:
                         batch = claim_next(
@@ -88,9 +92,11 @@ class ManualBulkCrawlConsumer:
                             exclude_job_ids=self.finished | self.jobs.keys() | self.retry_after.keys(),
                         )
                     except Exception:
+                        self.queue_exhausted = True
                         self.spider.logger.exception("manual_bulk_crawl.queue_failed")
                         break
                     if batch is None:
+                        self.queue_exhausted = True
                         break
                     job_id = batch.path.stem
                     job = _ActiveJob(batch=batch, pending=deque(sorted(batch.remaining)))
