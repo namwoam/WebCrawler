@@ -1,0 +1,54 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "name": "crawler-native-result-audit",
+    "namespace": "crawler-poc"
+  },
+  "spec": {
+    "backoffLimit": 0,
+    "template": {
+      "spec": {
+        "restartPolicy": "Never",
+        "containers": [
+          {
+            "name": "audit",
+            "image": "docker.io/crawler-poc/app:0.8",
+            "imagePullPolicy": "IfNotPresent",
+            "command": [
+              "python",
+              "-c",
+              "\"\"\"Post-run result audit: exact failure counts, robots classification and final URLs.\"\"\"\nimport base64\nimport collections\nfrom datetime import datetime\nimport heapq,json,time\nfrom pathlib import Path\nfrom poc.distributed.app.backend import Backend\nfrom poc.distributed.app.policy import routing\nfrom poc.distributed.app.request_profile import ROBOTS_CACHE,parse_robots,USER_AGENT\n\nroot=Path('/data/manual_bulk_crawls');c=Backend().client\nerrors=collections.Counter();statuses=collections.Counter();totals=collections.Counter()\nby_error_host=collections.defaultdict(collections.Counter);ignored=collections.defaultdict(list)\nlast=[];samples=collections.defaultdict(list)\njobs=[p.stem for p in (root/'pending').glob('*.json')]\nfor job in jobs:\n for p in (root/'results'/job/'crawler_00').glob('[0-9]*.json'):\n  r=json.loads(p.read_text());error=r.get('error');totals['records']+=1\n  totals['failed' if error else 'success']+=1;statuses[str(r.get('status_code'))]+=1\n  totals['html_files']+=int(r.get('html_file') is not None)\n  if error:\n   errors[error]+=1;by_error_host[error][routing(r['url'])['group']]+=1\n   if len(samples[error])<3:samples[error].append(r['url'])\n   if error=='IgnoreRequest':ignored[routing(r['final_url'])['origin_id']].append(r['final_url'])\n  row=dict(url=r['url'],final_url=r['final_url'],status_code=r.get('status_code'),error=error,fetched_at=r.get('fetched_at'))\n  heapq.heappush(last,(p.stat().st_mtime_ns,p.name,job,row))\n  if len(last)>10:heapq.heappop(last)\nrobot_reasons=collections.Counter();ids=list(ignored)\nfor start in range(0,len(ids),128):\n batch=ids[start:start+128];raws=c.hmget(ROBOTS_CACHE,batch)\n for oid,raw in zip(batch,raws):\n  origin=json.loads(raw or '{}');urls=ignored[oid]\n  if not origin.get('has_parser'):\n   robot_reasons['IgnoreRequest_not_from_robots_rules_or_unknown_cache']+=len(urls);continue\n  parser=parse_robots(base64.b64decode(origin['body_b64']))\n  for url in urls:robot_reasons['robots_rules_disallow' if not parser.allowed(url,USER_AGENT) else 'other_IgnoreRequest_redirect_limit_or_filter']+=1\nout=dict(epoch=time.time(),jobs=len(jobs),totals=dict(totals),error_rate=totals['failed']/max(1,totals['records']),\n errors=errors.most_common(),statuses=statuses.most_common(),ignore_request_breakdown=dict(robot_reasons),\n top_hosts={e:h.most_common(10) for e,h in by_error_host.items()},sample_urls=dict(samples),\n last_completed=[x[3] for x in sorted(last,reverse=True)])\nprint(json.dumps(out,ensure_ascii=False,indent=2))\n"
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              },
+              "limits": {
+                "cpu": "1",
+                "memory": "2Gi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "data",
+                "mountPath": "/data",
+                "subPath": "crawl",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "data",
+            "persistentVolumeClaim": {
+              "claimName": "crawler-poc-html"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
