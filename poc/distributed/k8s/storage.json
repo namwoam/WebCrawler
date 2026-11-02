@@ -1,0 +1,22 @@
+{
+  "apiVersion": "v1",
+  "kind": "PersistentVolumeClaim",
+  "metadata": {
+    "name": "crawler-poc-html",
+    "namespace": "crawler-poc",
+    "labels": {
+      "app.kubernetes.io/part-of": "crawler-poc"
+    }
+  },
+  "spec": {
+    "accessModes": [
+      "ReadWriteOnce"
+    ],
+    "storageClassName": "crawler-poc-pool",
+    "resources": {
+      "requests": {
+        "storage": "200Gi"
+      }
+    }
+  }
+}

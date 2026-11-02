@@ -1,0 +1,64 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "crawler-poc-expand-html-200gi",
+    "namespace": "crawler-poc"
+  },
+  "spec": {
+    "restartPolicy": "Never",
+    "nodeSelector": {
+      "kubernetes.io/hostname": "crawler-poc-4"
+    },
+    "containers": [
+      {
+        "name": "resize",
+        "image": "docker.io/crawler-poc/storage-helper:0.1",
+        "imagePullPolicy": "IfNotPresent",
+        "command": [
+          "sh",
+          "-ceu",
+          "#!/bin/sh\n# Administrative resize for an existing quota-backed local PV (no CSI resizer).\nset -eu\npool=/pool\nname=${VOLUME_DIRECTORY:?}\nsize=${NEW_SIZE_BYTES:?}\ncase \"$name\" in pvc-*_crawler-poc_crawler-poc-html) ;; *) echo 'Unexpected volume' >&2; exit 1;; esac\nexec 9>\"$pool/.allocation.lock\"\nflock -x 9\ndb=\"$pool/.allocations.tsv\"\nproject=$(awk -v n=\"$name\" '$1==n {print $3}' \"$db\")\nold=$(awk -v n=\"$name\" '$1==n {print $2}' \"$db\")\n[ -n \"$project\" ] && [ \"$size\" -ge \"$old\" ]\nused=$(awk -v n=\"$name\" '$1!=n {s+=$2} END {printf \"%.0f\",s}' \"$db\")\ntotal=$(df -B1 --output=size \"$pool\" | tail -1 | tr -d ' ')\n[ $((used+size)) -le \"$total\" ] || { echo 'Insufficient pool capacity' >&2; exit 1; }\n[ -d \"$pool/$name\" ]\nsetquota -P \"$project\" 0 $(((size+1023)/1024)) 0 0 \"$pool\"\nawk -v n=\"$name\" -v size=\"$size\" 'BEGIN {OFS=\"\\t\"} $1==n {$2=size} {print $1,$2,$3}' \"$db\" > \"$db.resize\"\nmv \"$db.resize\" \"$db\"\nsync \"$db\"\necho \"Quota expanded from $old to $size bytes, project $project\"\nrepquota -P \"$pool\"\n"
+        ],
+        "env": [
+          {
+            "name": "VOLUME_DIRECTORY",
+            "value": "pvc-c5bcd4af-4cc7-47c4-9f59-eb5a7143249b_crawler-poc_crawler-poc-html"
+          },
+          {
+            "name": "NEW_SIZE_BYTES",
+            "value": "214748364800"
+          }
+        ],
+        "securityContext": {
+          "privileged": true
+        },
+        "resources": {
+          "requests": {
+            "cpu": "10m",
+            "memory": "32Mi"
+          },
+          "limits": {
+            "cpu": "200m",
+            "memory": "128Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "name": "pool",
+            "mountPath": "/pool"
+          }
+        ]
+      }
+    ],
+    "volumes": [
+      {
+        "name": "pool",
+        "hostPath": {
+          "path": "/var/lib/crawler-poc-pv/pool",
+          "type": "Directory"
+        }
+      }
+    ]
+  }
+}

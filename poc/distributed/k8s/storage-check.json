@@ -1,0 +1,53 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "crawler-poc-storage-check",
+    "namespace": "crawler-poc",
+    "labels": {
+      "app.kubernetes.io/part-of": "crawler-poc",
+      "app": "storage-check"
+    }
+  },
+  "spec": {
+    "restartPolicy": "Never",
+    "nodeSelector": {
+      "kubernetes.io/hostname": "crawler-poc-4"
+    },
+    "containers": [
+      {
+        "name": "check",
+        "image": "busybox:1.37.0",
+        "command": [
+          "sh",
+          "-ec",
+          "if test -f /html/.poc-storage-check; then echo \"Existing marker persisted\"; else printf \"crawler-poc persistent storage verified\\n\" > /html/.poc-storage-check; sync; echo \"Marker created\"; fi; cat /html/.poc-storage-check; df -h /html"
+        ],
+        "resources": {
+          "requests": {
+            "cpu": "10m",
+            "memory": "8Mi"
+          },
+          "limits": {
+            "cpu": "100m",
+            "memory": "32Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "name": "html",
+            "mountPath": "/html"
+          }
+        ]
+      }
+    ],
+    "volumes": [
+      {
+        "name": "html",
+        "persistentVolumeClaim": {
+          "claimName": "crawler-poc-html"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,848 @@
+{
+  "uid": "crawler-poc",
+  "title": "Crawler POC \u2014 Distributed",
+  "tags": [
+    "crawler-poc",
+    "kubernetes"
+  ],
+  "description": "Three physical nodes, max 40 CPU each. Worker benchmarks: 10/25/50/75/100, baseline 50. Crawler metrics become available as application workers are deployed. Node CPU charts include POC namespace pods, excluding control-plane system processes.",
+  "schemaVersion": 39,
+  "version": 0,
+  "refresh": "15s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ready nodes",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})",
+          "legendFormat": "Ready nodes",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Running crawler workers",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(kube_pod_status_phase{namespace=\"crawler-poc\",pod=~\"crawler-worker-.*\",phase=\"Running\"}) or vector(0)",
+          "legendFormat": "Running crawler workers",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP requests / sec",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(crawler_http_requests_total[1m])) or vector(0)",
+          "legendFormat": "HTTP requests / sec",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Successful HTML / sec",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(crawler_urls_completed_total{outcome=\"success\"}[1m])) or vector(0)",
+          "legendFormat": "Successful HTML / sec",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "URL error %",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(crawler_urls_completed_total{outcome=\"error\"}[2m])) / clamp_min(sum(rate(crawler_urls_completed_total[2m])), 0.000001) or vector(0)",
+          "legendFormat": "URL error %",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Stored HTML",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(crawler_html_bytes_stored) or vector(0)",
+          "legendFormat": "Stored HTML",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "POC CPU by node \u2014 40 core cap per node",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(node) (rate(container_cpu_usage_seconds_total{namespace=\"crawler-poc\",container!=\"\",container!=\"POD\"}[2m]))",
+          "legendFormat": "{{node}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "POC memory by node",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(node) (container_memory_working_set_bytes{namespace=\"crawler-poc\",container!=\"\",container!=\"POD\"})",
+          "legendFormat": "{{node}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "HTTP request rate by node",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(node) (rate(crawler_http_requests_total[1m]))",
+          "legendFormat": "{{node}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "URL completions",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(outcome) (rate(crawler_urls_completed_total[1m]))",
+          "legendFormat": "{{outcome}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Active downloads and uploads",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(node) (crawler_active_downloads)",
+          "legendFormat": "downloads {{node}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by(node) (crawler_active_uploads)",
+          "legendFormat": "uploads {{node}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Host scheduling",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(crawler_pending_urls)",
+          "legendFormat": "pending URLs",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(crawler_ready_hosts)",
+          "legendFormat": "ready hosts",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "sum(crawler_cooldown_hosts)",
+          "legendFormat": "hosts cooling down",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "HTTP latency",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50,sum by(le)(rate(crawler_http_request_duration_seconds_bucket[2m])))",
+          "legendFormat": "p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95,sum by(le)(rate(crawler_http_request_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Result upload latency",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50,sum by(le)(rate(crawler_result_upload_duration_seconds_bucket[2m])))",
+          "legendFormat": "p50",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95,sum by(le)(rate(crawler_result_upload_duration_seconds_bucket[2m])))",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "HTTP response status",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(status)(rate(crawler_http_requests_total[2m]))",
+          "legendFormat": "{{status}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "POC CPU throttling",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(node)(rate(container_cpu_cfs_throttled_seconds_total{namespace=\"crawler-poc\",container!=\"\",container!=\"POD\"}[2m]))",
+          "legendFormat": "{{node}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "HTML volume usage",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kubelet_volume_stats_used_bytes{namespace=\"crawler-poc\",persistentvolumeclaim=\"crawler-poc-html\"}",
+          "legendFormat": "used",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "kubelet_volume_stats_capacity_bytes{namespace=\"crawler-poc\",persistentvolumeclaim=\"crawler-poc-html\"}",
+          "legendFormat": "capacity",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "HTML PVC request and phase",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "crawler-poc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 44,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=\"crawler-poc\",persistentvolumeclaim=\"crawler-poc-html\"}",
+          "legendFormat": "requested bytes",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "crawler-poc-prometheus"
+          }
+        }
+      ]
+    }
+  ],
+  "editable": true
+}

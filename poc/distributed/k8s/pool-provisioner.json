@@ -1,0 +1,338 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "crawler-poc-pool-provisioner",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "crawler-poc-pool-provisioner-role",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "crawler-poc-pool-provisioner-role",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes",
+            "persistentvolumeclaims",
+            "configmaps",
+            "pods",
+            "pods/log"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumes"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "patch",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "events"
+          ],
+          "verbs": [
+            "create",
+            "patch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "storageclasses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "crawler-poc-pool-provisioner-bind",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "crawler-poc-pool-provisioner-role"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "crawler-poc-pool-provisioner",
+          "namespace": "crawler-poc"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "crawler-poc-pool-provisioner-bind",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "crawler-poc-pool-provisioner-role"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "crawler-poc-pool-provisioner",
+          "namespace": "crawler-poc"
+        }
+      ]
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crawler-poc-pool-provisioner",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "crawler-poc-pool-provisioner"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "crawler-poc-pool-provisioner"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "command": [
+                  "local-path-provisioner",
+                  "--debug",
+                  "start",
+                  "--config",
+                  "/etc/config/config.json",
+                  "--provisioner-name",
+                  "crawler-poc.io/pool",
+                  "--configmap-name",
+                  "crawler-poc-pool-config",
+                  "--service-account-name",
+                  "crawler-poc-pool-provisioner",
+                  "--helper-image",
+                  "docker.io/crawler-poc/storage-helper:0.1",
+                  "--allow-unsafe-helper-pod-template"
+                ],
+                "env": [
+                  {
+                    "name": "POD_NAMESPACE",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.namespace"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CONFIG_MOUNT_PATH",
+                    "value": "/etc/config/"
+                  },
+                  {
+                    "name": "HEALTH_PORT",
+                    "value": "8080"
+                  }
+                ],
+                "image": "docker.io/rancher/local-path-provisioner:v0.0.37",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": "health"
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 10
+                },
+                "name": "crawler-poc-pool-provisioner",
+                "ports": [
+                  {
+                    "containerPort": 8080,
+                    "name": "health",
+                    "protocol": "TCP"
+                  }
+                ],
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/ready",
+                    "port": "health"
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 5
+                },
+                "startupProbe": {
+                  "failureThreshold": 12,
+                  "httpGet": {
+                    "path": "/health",
+                    "port": "health"
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 5
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/config/",
+                    "name": "config-volume"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "25m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "256Mi"
+                  }
+                }
+              }
+            ],
+            "serviceAccountName": "crawler-poc-pool-provisioner",
+            "volumes": [
+              {
+                "configMap": {
+                  "name": "crawler-poc-pool-config"
+                },
+                "name": "config-volume"
+              }
+            ],
+            "nodeSelector": {
+              "kubernetes.io/hostname": "crawler-poc-1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "storage.k8s.io/v1",
+      "kind": "StorageClass",
+      "metadata": {
+        "name": "crawler-poc-pool",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "provisioner": "crawler-poc.io/pool",
+      "reclaimPolicy": "Retain",
+      "volumeBindingMode": "WaitForFirstConsumer",
+      "parameters": {
+        "volumeType": "local"
+      },
+      "allowedTopologies": [
+        {
+          "matchLabelExpressions": [
+            {
+              "key": "kubernetes.io/hostname",
+              "values": [
+                "crawler-poc-3",
+                "crawler-poc-4"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "data": {
+        "config.json": "{\"nodePathMap\": [{\"node\": \"DEFAULT_PATH_FOR_NON_LISTED_NODES\", \"paths\": []}, {\"node\": \"crawler-poc-3\", \"paths\": [\"/var/lib/crawler-poc-pv/pool\"]}, {\"node\": \"crawler-poc-4\", \"paths\": [\"/var/lib/crawler-poc-pv/pool\"]}]}",
+        "helperPod.yaml": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: helper-pod\nspec:\n  containers:\n  - name: helper-pod\n    image: docker.io/crawler-poc/storage-helper:0.1\n    imagePullPolicy: IfNotPresent\n    securityContext:\n      privileged: true\n    resources:\n      requests:\n        cpu: 10m\n        memory: 32Mi\n      limits:\n        cpu: 200m\n        memory: 128Mi\n",
+        "setup": "#!/bin/sh\n# Runs only against the POC filesystem, inside a privileged provisioner helper.\nset -eu\nparent=$(dirname \"$VOL_DIR\")\nname=$(basename \"$VOL_DIR\")\ncase \"$parent\" in /var/lib/crawler-poc-pv/pool) ;; *) echo \"Unexpected pool path\" >&2; exit 1 ;; esac\nsize=${VOL_SIZE_BYTES:?missing requested volume size}\nexec 9>\"$parent/.allocation.lock\"\nflock -x 9\ndb=\"$parent/.allocations.tsv\"\ntouch \"$db\"\nexisting=$(awk -v n=\"$name\" '$1 == n {print $3}' \"$db\")\nif [ -n \"$existing\" ]; then\n    project=$existing\nelse\n    used=$(awk '{s += $2} END {printf \"%.0f\", s}' \"$db\")\n    total=$(df -B1 --output=size \"$parent\" | tail -1 | tr -d ' ')\n    if [ $((used + size)) -gt \"$total\" ]; then\n        echo \"POC pool has insufficient unallocated capacity\" >&2\n        exit 1\n    fi\n    project=$(awk 'BEGIN {m=10000} $3 >= m {m=$3+1} END {print m}' \"$db\")\nfi\nmkdir -p \"$VOL_DIR\"\nchattr -p \"$project\" +P \"$VOL_DIR\"\nblocks=$(((size + 1023) / 1024))\nsetquota -P \"$project\" 0 \"$blocks\" 0 0 \"$parent\"\nchmod 0777 \"$VOL_DIR\"\nif [ -z \"$existing\" ]; then\n    printf '%s\\t%s\\t%s\\n' \"$name\" \"$size\" \"$project\" >> \"$db\"\n    sync \"$db\"\nfi\necho \"Allocated $size bytes with project quota $project\"\n",
+        "teardown": "#!/bin/sh\nset -eu\necho 'Retained POC volumes require explicit reclamation'\nexit 1\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "crawler-poc-pool-config",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      }
+    }
+  ]
+}

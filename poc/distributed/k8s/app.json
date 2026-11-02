@@ -1,0 +1,584 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crawler-valkey",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "crawler-valkey"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "crawler-valkey"
+            },
+            "annotations": {
+              "prometheus.io/scrape": "true"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "valkey",
+                "image": "valkey/valkey:9.1.3",
+                "command": [
+                  "valkey-server",
+                  "--bind",
+                  "0.0.0.0",
+                  "--protected-mode",
+                  "no",
+                  "--appendonly",
+                  "yes",
+                  "--appendfsync",
+                  "everysec",
+                  "--dir",
+                  "/data",
+                  "--maxmemory",
+                  "3072mb",
+                  "--maxmemory-policy",
+                  "noeviction"
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "500m",
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "cpu": "2",
+                    "memory": "4Gi"
+                  }
+                },
+                "ports": [
+                  {
+                    "name": "valkey",
+                    "containerPort": 6379
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data",
+                    "subPath": "valkey"
+                  }
+                ],
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "valkey-cli",
+                      "ping"
+                    ]
+                  },
+                  "initialDelaySeconds": 2
+                }
+              }
+            ],
+            "terminationGracePeriodSeconds": 120,
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "crawler-poc-html"
+                }
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "prepare",
+                "image": "docker.io/crawler-poc/app:0.11",
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                  "python",
+                  "-c",
+                  "from pathlib import Path; [(Path('/data')/d).mkdir(exist_ok=True) for d in ('crawl','valkey')]"
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "64Mi"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "crawler-valkey",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "selector": {
+          "app": "crawler-valkey"
+        },
+        "ports": [
+          {
+            "port": 6379,
+            "targetPort": 6379
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crawler-api",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "crawler-api"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "crawler-api"
+            },
+            "annotations": {
+              "prometheus.io/scrape": "true"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "api",
+                "image": "docker.io/crawler-poc/app:0.11",
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                  "python",
+                  "-m",
+                  "uvicorn",
+                  "poc.distributed.app.api:create_app",
+                  "--factory",
+                  "--host",
+                  "0.0.0.0",
+                  "--port",
+                  "8080",
+                  "--workers",
+                  "8",
+                  "--no-access-log"
+                ],
+                "env": [
+                  {
+                    "name": "VALKEY_URL",
+                    "value": "redis://crawler-valkey:6379/0"
+                  },
+                  {
+                    "name": "WORKER_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "crawler-poc-worker",
+                        "key": "token"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CRAWL_DATA",
+                    "value": "/data/manual_bulk_crawls"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "4",
+                    "memory": "1Gi"
+                  },
+                  "limits": {
+                    "cpu": "12",
+                    "memory": "4Gi"
+                  }
+                },
+                "ports": [
+                  {
+                    "name": "metrics",
+                    "containerPort": 8080
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data",
+                    "subPath": "crawl"
+                  }
+                ],
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 3
+                }
+              }
+            ],
+            "terminationGracePeriodSeconds": 120,
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "crawler-poc-html"
+                }
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "prepare",
+                "image": "docker.io/crawler-poc/app:0.11",
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                  "python",
+                  "-c",
+                  "from pathlib import Path; [(Path('/data')/d).mkdir(exist_ok=True) for d in ('crawl','valkey')]"
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "64Mi"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "crawler-api",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "selector": {
+          "app": "crawler-api"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crawler-worker",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "replicas": 100,
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxSurge": 0,
+            "maxUnavailable": 1
+          }
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "crawler-worker"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "crawler-worker"
+            },
+            "annotations": {
+              "prometheus.io/scrape": "true"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "worker",
+                "image": "docker.io/crawler-poc/app:0.11",
+                "imagePullPolicy": "IfNotPresent",
+                "env": [
+                  {
+                    "name": "VALKEY_URL",
+                    "value": "redis://crawler-valkey:6379/0"
+                  },
+                  {
+                    "name": "WORKER_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "crawler-poc-worker",
+                        "key": "token"
+                      }
+                    }
+                  },
+                  {
+                    "name": "POD_NAME",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.name"
+                      }
+                    }
+                  },
+                  {
+                    "name": "NODE_NAME",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "spec.nodeName"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CRAWLER_API_URL",
+                    "value": "http://crawler-api:8080"
+                  },
+                  {
+                    "name": "LOKI_URL",
+                    "value": "http://172.16.191.2:3100"
+                  },
+                  {
+                    "name": "MOCK_DNS_TARGET",
+                    "value": "crawler-mock.crawler-poc.svc.cluster.local"
+                  },
+                  {
+                    "name": "CRAWLER_CONCURRENT_REQUESTS",
+                    "value": "256"
+                  },
+                  {
+                    "name": "WORKER_MAX_DOMAINS",
+                    "value": "30"
+                  },
+                  {
+                    "name": "CRAWLER_USE_AUTOTHROTTLE",
+                    "value": "true"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "1",
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "cpu": "4",
+                    "memory": "2Gi"
+                  }
+                },
+                "ports": [
+                  {
+                    "name": "metrics",
+                    "containerPort": 9101
+                  }
+                ],
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/",
+                    "port": 9101
+                  },
+                  "initialDelaySeconds": 3
+                },
+                "volumeMounts": [
+                  {
+                    "name": "tmp",
+                    "mountPath": "/tmp"
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 120,
+            "topologySpreadConstraints": [
+              {
+                "maxSkew": 1,
+                "minDomains": 3,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "DoNotSchedule",
+                "labelSelector": {
+                  "matchLabels": {
+                    "app": "crawler-worker"
+                  }
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "tmp",
+                "emptyDir": {
+                  "sizeLimit": "2Gi"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "crawler-mock-source",
+        "namespace": "crawler-poc"
+      },
+      "data": {
+        "mock.py": "\"\"\"Controlled external HTTP target used before live URL benchmarks.\"\"\"\nimport asyncio\nfrom collections import Counter\nimport time\nfrom aiohttp import web\n\nactive=Counter()\npeak=Counter()\nevents=[]\nattempts=Counter()\n\nasync def handle(request):\n    if request.path=='/__stats':\n        return web.json_response(dict(events=events,peak=dict(peak),active=dict(active)))\n    host=request.host\n    active[host]+=1;peak[host]=max(peak[host],active[host])\n    key=(host,request.path);attempts[key]+=1\n    events.append(dict(host=host,path=request.path,start=time.time(),worker=request.headers.get('X-Crawler-Worker'),node=request.headers.get('X-Crawler-Node'),headers=dict(request.headers)))\n    event=events[-1]\n    try:\n        if request.path=='/robots.txt':\n            if host.startswith('robots403.'):\n                return web.Response(status=403,text='access denied')\n            if host.startswith('robots429.'):\n                return web.Response(status=429,headers={'Retry-After':'86400'},text='rate limited')\n            if host.startswith('robots500.'):\n                return web.Response(status=500,text='server unavailable')\n            if host.startswith('robotsrules403.'):\n                return web.Response(status=403,text='User-agent: *\\nDisallow: /denied\\n')\n            return web.Response(text='User-agent: *\\nDisallow: /denied\\nDisallow: /*.pdf$\\nAllow: /public/*.pdf$\\nCrawl-delay: 86400\\n')\n        await asyncio.sleep(float(request.query.get('delay','0.1')))\n        if request.path=='/throttle' and attempts[key]==1:\n            return web.Response(status=429,headers={'Retry-After':'2'})\n        if request.path=='/refresh':\n            return web.Response(text='<html><meta http-equiv=\"refresh\" content=\"0;url=/html\"></html>',content_type='text/html')\n        if request.path.startswith('/chain/'):\n            step=int(request.path.rsplit('/',1)[1])\n            return web.Response(status=302,headers={'Location':f'/chain/{step+1}' if step<7 else '/retry503'})\n        if request.path=='/retry503' and attempts[key]==1:\n            return web.Response(status=503,text='temporary')\n        if request.path=='/redirect':\n            return web.Response(status=302,headers={'Location':'http://target.poc.test:8081/html'})\n        return web.Response(text='<html><title>crawler mock</title>ok</html>',content_type='text/html')\n    finally:\n        active[host]-=1;event['end']=time.time()\n\napp=web.Application();app.router.add_route('*','/{path:.*}',handle)\nweb.run_app(app,host='0.0.0.0',port=8081)\n"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crawler-mock",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxSurge": 0,
+            "maxUnavailable": 1
+          }
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "crawler-mock"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "crawler-mock"
+            },
+            "annotations": {
+              "prometheus.io/scrape": "true",
+              "poc.mock-source-sha256": "3b68ba80fb88e539b3ac8e1ab0fba6e6c2bb36265983664ce439b4e6ac7ad462"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "mock",
+                "image": "docker.io/crawler-poc/app:0.11",
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                  "python",
+                  "-m",
+                  "poc.distributed.app.mock"
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "64Mi"
+                  },
+                  "limits": {
+                    "cpu": "1",
+                    "memory": "256Mi"
+                  }
+                },
+                "ports": [
+                  {
+                    "name": "http",
+                    "containerPort": 8081
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "source",
+                    "mountPath": "/app/poc/distributed/app/mock.py",
+                    "subPath": "mock.py"
+                  }
+                ]
+              }
+            ],
+            "terminationGracePeriodSeconds": 120,
+            "volumes": [
+              {
+                "name": "source",
+                "configMap": {
+                  "name": "crawler-mock-source"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "crawler-mock",
+        "namespace": "crawler-poc",
+        "labels": {
+          "app.kubernetes.io/part-of": "crawler-poc"
+        }
+      },
+      "spec": {
+        "selector": {
+          "app": "crawler-mock"
+        },
+        "ports": [
+          {
+            "port": 8081,
+            "targetPort": 8081
+          }
+        ]
+      }
+    }
+  ]
+}
