@@ -17,3 +17,6 @@ tmp/
 artifacts/
 
 Not_push/
+
+# Local distributed crawler session state
+poc/distributed/STATE.json
