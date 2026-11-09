@@ -14,7 +14,7 @@ for i,(g,due) in enumerate(ready):
         next_in=max(0,float(host.get('next',0))-now),head_kind=task.get('kind'),head_attempt=task.get('attempt'),
         head_delay=max(0,float(task.get('not_before',0))-now),origin_id=task.get('origin_id')))
 p=c.pipeline(transaction=False)
-for row in rows:p.hget('poc:origins:v2',row['origin_id'] or '')
+for row in rows:p.hget('poc:origins:v3',row['origin_id'] or '')
 origins=p.execute()
 for row,raw in zip(rows,origins):row['origin_state']=json.loads(raw or '{}').get('state');row.pop('origin_id')
 leases=[json.loads(v) for v in c.hvals('poc:leases')]

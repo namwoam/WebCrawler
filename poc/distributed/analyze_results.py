@@ -3,7 +3,7 @@ import collections,json,time
 from pathlib import Path
 from urllib.parse import urlsplit
 from poc.distributed.app.backend import Backend
-c=Backend().client
+backend=Backend();c=backend.client
 root=Path('/data/manual_bulk_crawls')
 errors=collections.Counter();statuses=collections.Counter();counts=collections.Counter();byerror=collections.defaultdict(collections.Counter)
 failed_samples=collections.defaultdict(list)
@@ -30,9 +30,9 @@ robot_reasons=collections.Counter()
 ids=list(robot_origins)
 for offset in range(0,len(ids),256):
     batch=ids[offset:offset+256]
-    values=c.hmget('poc:origins:v2',batch)
+    values=backend.robots_snapshot(batch)
     for ident,raw in zip(batch,values):
-        state=json.loads(raw or '{}').get('state','missing')
+        state=(raw or {}).get('state','missing')
         reason='robots_fetch_failed_fail_closed' if state=='denied' else 'robots_rules_disallow' if state=='ready' else state
         robot_reasons[reason]+=robot_origins[ident]
 summary=dict(robot_denial_breakdown=dict(robot_reasons),epoch=time.time(),jobs=len(jobs),completed_jobs=sum(j.get('status')=='completed' for j in jobs),

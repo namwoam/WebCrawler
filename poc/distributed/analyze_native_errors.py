@@ -8,7 +8,7 @@ from poc.distributed.app.backend import Backend
 from poc.distributed.app.policy import routing
 from poc.distributed.app.request_profile import ROBOTS_CACHE,parse_robots,USER_AGENT
 
-root=Path('/data/manual_bulk_crawls');c=Backend().client
+root=Path('/data/manual_bulk_crawls');backend=Backend();c=backend.client
 errors=collections.Counter();statuses=collections.Counter();totals=collections.Counter()
 by_error_host=collections.defaultdict(collections.Counter);ignored=collections.defaultdict(list)
 last=[];samples=collections.defaultdict(list)
@@ -27,9 +27,9 @@ for job in jobs:
   if len(last)>10:heapq.heappop(last)
 robot_reasons=collections.Counter();ids=list(ignored)
 for start in range(0,len(ids),128):
- batch=ids[start:start+128];raws=c.hmget(ROBOTS_CACHE,batch)
+ batch=ids[start:start+128];raws=backend.robots_snapshot(batch)
  for oid,raw in zip(batch,raws):
-  origin=json.loads(raw or '{}');urls=ignored[oid]
+  origin=raw or {};urls=ignored[oid]
   if not origin.get('has_parser'):
    robot_reasons['IgnoreRequest_not_from_robots_rules_or_unknown_cache']+=len(urls);continue
   parser=parse_robots(base64.b64decode(origin['body_b64']))
