@@ -18,7 +18,7 @@ async def verify():
         assert sync.publish('atomic',payload)==0
         r=await b.claim('robots',1);assert len(r['tasks'])==1
         robot=r['tasks'][0];assert robot['kind']=='robots'
-        await c.hset('poc:origins:v2',robot['origin_id'],json.dumps(dict(state='ready',text='')))
+        await b.store_robots(robot,dict(state='ready',has_parser=False,status_code=None))
         await b.ack(robot);await c.hset('poc:host:atomic.poc.test','next',0)
         responses=await asyncio.gather(*(b.claim(f'w{i}',8) for i in range(100)))
         tasks=[t for r in responses for t in r['tasks']]

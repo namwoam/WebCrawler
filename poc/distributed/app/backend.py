@@ -1,4 +1,5 @@
 import json
+import asyncio
 import os
 import uuid
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ import valkey.asyncio
 
 from . import scripts
 from .policy import routing
+from .profiling import stage
+from .retention import ROBOTS_CACHE, ROBOTS_BODY_PREFIX, ROBOTS_MAX_BYTES, ROBOTS_MAX_ENTRIES, pack_robots, unpack_robots, robots_ttl
 
 VALKEY_URL = os.getenv("VALKEY_URL", "redis://crawler-valkey:6379/0")
 
@@ -29,12 +32,30 @@ class Backend:
         self.enqueue = self.client.register_script(scripts.ENQUEUE)
         self.ack = self.client.register_script(scripts.ACK)
         self.cancel = self.client.register_script(scripts.CANCEL)
+        self.maintain = self.client.register_script(scripts.MAINTAIN)
 
     def publish(self, job_id, payload):
         request = {"id": job_id, "created_at": payload["created_at"],
                    "expires": datetime.fromisoformat(payload["expires_at"]).timestamp(),
                    "tasks": tasks_for(job_id, payload)}
         return self.enqueue(args=[json.dumps(request)])
+
+    def robots_snapshot(self, origins):
+        """Read-only audit; eviction/expiry means historical rules are unknown."""
+        if not origins:
+            return []
+        metadata=self.client.hmget(ROBOTS_CACHE,origins)
+        pipeline=self.client.pipeline(transaction=False)
+        for ident,raw in zip(origins,metadata):
+            generation=json.loads(raw or '{}').get('generation','missing')
+            pipeline.get(ROBOTS_BODY_PREFIX+ident+':'+generation)
+        result=[]
+        for raw in pipeline.execute():
+            try:
+                result.append(unpack_robots(raw) if raw else None)
+            except (ValueError,OSError,EOFError,KeyError):
+                result.append(None)
+        return result
 
 
 class AsyncBackend:
@@ -46,9 +67,38 @@ class AsyncBackend:
         self._ack = self.client.register_script(scripts.ACK)
         self._requeue = self.client.register_script(scripts.REQUEUE)
         self._recover = self.client.register_script(scripts.RECOVER)
+        self._robots_store = self.client.register_script(scripts.ROBOTS_STORE)
+        self._robots_get = self.client.register_script(scripts.ROBOTS_GET)
+        self._robots_invalidate = self.client.register_script(scripts.ROBOTS_INVALIDATE)
+
+    async def get_robots(self, task):
+        generation = task.get('robots_generation')
+        if not generation:
+            return None
+        value = await self._robots_get(args=[task['origin_id'], generation])
+        if value is None:
+            return None
+        try:
+            return await asyncio.to_thread(unpack_robots, value)
+        except (ValueError, OSError, EOFError, KeyError):
+            await self._robots_invalidate(args=[task['origin_id'], generation, value])
+            return None
+
+    async def store_robots(self, task, value):
+        packed = await asyncio.to_thread(pack_robots, value)
+        ttl = robots_ttl(value)
+        # Each Lua invocation evicts at most 128 cache entries. Yield between
+        # batches so large inserts do not monopolize the scheduler's thread.
+        while True:
+            result = await self._robots_store(args=[task['token'], packed, ttl,
+                ROBOTS_MAX_BYTES, ROBOTS_MAX_ENTRIES])
+            if result != 2:
+                return bool(result)
+            await asyncio.sleep(.01)
 
     async def claim(self, worker, capacity, domains=(), max_domains=30):
-        data = json.loads(await self._claim(args=[min(8, capacity), uuid.uuid4().hex, worker, now(), json.dumps(list(domains)), max_domains]))
+        with stage('worker','valkey_claim'):
+            data = json.loads(await self._claim(args=[min(16, capacity), uuid.uuid4().hex, worker, now(), json.dumps(list(domains)), max_domains]))
         data["tasks"] = data["tasks"] if isinstance(data["tasks"], list) else []
         return data
 
@@ -56,7 +106,8 @@ class AsyncBackend:
         await self.client.zrem("poc:net:" + task["group"], task["token"])
 
     async def start_network(self, task):
-        return json.loads(await self._start_network(args=[task['token']]))
+        with stage('worker','valkey_start_network'):
+            return json.loads(await self._start_network(args=[task['token']]))
 
     async def ack(self, task):
         return await self._ack(args=[task["token"], 1, 0, 0, now()])

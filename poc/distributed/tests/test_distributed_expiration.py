@@ -6,7 +6,7 @@ from poc.distributed.app import api
 
 
 def service(tmp_path,monkeypatch):
-    backend=SimpleNamespace(cancel=Mock())
+    backend=SimpleNamespace(cancel=Mock(),maintain=Mock())
     monkeypatch.setattr(api,'ROOT',tmp_path)
     monkeypatch.setattr(api,'Backend',lambda:backend)
     return api.DistributedService(),backend
@@ -27,3 +27,18 @@ def test_unknown_delete_does_not_cancel_unrelated_coordinator_state(tmp_path,mon
     s,b=service(tmp_path,monkeypatch)
     with pytest.raises(FileNotFoundError):s.delete('f'*32)
     b.cancel.assert_not_called()
+
+
+def test_full_frontier_keeps_durable_outbox_for_later_retry(tmp_path,monkeypatch):
+    s,b=service(tmp_path,monkeypatch)
+    b.client=SimpleNamespace(exists=Mock(return_value=False))
+    b.publish=Mock(return_value=-1)
+    s.progress=Mock()
+    job=s.submit(['https://example.org/a'])
+    s.scan()
+    assert (s.pending_dir/(job+'.json')).exists()
+    b.publish.assert_called_once()
+    s.progress.assert_not_called()
+    b.publish.return_value=1
+    s.scan()
+    s.progress.assert_called_once_with(job)

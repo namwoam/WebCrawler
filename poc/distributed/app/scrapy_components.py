@@ -32,10 +32,10 @@ class JobCancelled(IgnoreRequest):
 class SharedRobotsMiddleware(RobotsTxtMiddleware):
     async def robot_parser(self,request):
         task=request.meta['poc_task']
-        raw=await self.crawler.poc_frontier.backend.client.hget(ROBOTS_CACHE,task['origin_id'])
-        origin=json.loads(raw or '{"state":"pending"}')
-        if origin.get('state')=='pending':
-            # Recovery can temporarily return a URL before its robots cache is ready.
+        origin=await self.crawler.poc_frontier.backend.get_robots(task)
+        if origin is None:
+            # Expiration/eviction can race a lease. Requeue atomically schedules
+            # one replacement robots fetch; no page bypasses rule enforcement.
             raise PermitExpired('Robots cache not ready; return to frontier')
         if not origin.get('has_parser',False):
             return None

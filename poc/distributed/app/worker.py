@@ -39,7 +39,7 @@ class DistributedSpider(Spider):
             cached=robots_result(metadata,response.body)
         except Exception as error:
             cached=robots_result({**metadata,'download_exception':True,'error':type(error).__name__},b'')
-        await self.crawler.poc_frontier.backend.client.hset(ROBOTS_CACHE,task['origin_id'],json.dumps(cached))
+        await self.crawler.poc_frontier.backend.store_robots(task,cached)
         await self.crawler.poc_frontier.backend.ack(task)
         self.crawler.poc_frontier.finish(task)
 
@@ -61,7 +61,7 @@ class DistributedSpider(Spider):
         metadata=dict(final_url=request.url,status_code=None,error=failure.type.__name__,
                       html=False,fetched_at=now(),download_exception=True)
         if task['kind']=='robots':
-            await frontier.backend.client.hset(ROBOTS_CACHE,task['origin_id'],json.dumps(robots_result(metadata,b'')))
+            await frontier.backend.store_robots(task,robots_result(metadata,b''))
             await frontier.backend.ack(task);frontier.finish(task)
             return None
         return dict(task=task,metadata=metadata,body=None)

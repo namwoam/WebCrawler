@@ -4,6 +4,7 @@ from functools import lru_cache
 import os
 
 from scrapy.robotstxt import ProtegoRobotParser
+from .retention import ROBOTS_CACHE
 
 USER_AGENT = os.getenv('CRAWLER_USER_AGENT',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -20,8 +21,6 @@ DOWNLOAD_TIMEOUT = 15
 DNS_TIMEOUT = 15
 RETRY_TIMES = 1
 REDIRECT_MAX_TIMES = 20
-# New cache namespace prevents old fail-closed/Python parser entries being reused.
-ROBOTS_CACHE = 'poc:origins:v2'
 
 
 def parse_robots(body):

@@ -80,7 +80,7 @@ def test_shared_robots_uses_inherited_native_rule_enforcement():
         b'User-agent: *\nDisallow: /*.pdf$\nAllow: /public/*.pdf$\n')
     crawler=SimpleNamespace(settings=Settings({**settings(),'ROBOTSTXT_OBEY':True}),spider=Spider('test'))
     crawler.stats=StatsCollector(crawler)
-    crawler.poc_frontier=SimpleNamespace(backend=SimpleNamespace(client=SimpleNamespace(hget=AsyncMock(return_value=json.dumps(cache)))))
+    crawler.poc_frontier=SimpleNamespace(backend=SimpleNamespace(get_robots=AsyncMock(return_value=cache)))
     middleware=SharedRobotsMiddleware.from_crawler(crawler)
     def request(path):return Request('https://example.org'+path,meta={'poc_task':{'origin_id':'test'}})
     asyncio.run(middleware.process_request(request('/public/a.pdf')))

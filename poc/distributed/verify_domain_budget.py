@@ -17,7 +17,7 @@ async def main():
             result=await b.claim('worker-a',8,owned,30)
             for task in result['tasks']:
                 if task['kind']=='robots':
-                    await c.hset('poc:origins:v2',task['origin_id'],json.dumps(dict(state='ready',has_parser=False)))
+                    await b.store_robots(task,dict(state='ready',has_parser=False,status_code=None))
                     await b.ack(task)
                 else:
                     owned.add(task['group']);leases.append(task)
@@ -34,7 +34,7 @@ async def main():
         os.environ['HOST_QPS']='32'
         sync.publish('shared',payload(['http://shared.poc.test/a','http://shared.poc.test/b']))
         robot=(await b.claim('robots',1))['tasks'][0]
-        await c.hset('poc:origins:v2',robot['origin_id'],json.dumps(dict(state='ready',has_parser=False)))
+        await b.store_robots(robot,dict(state='ready',has_parser=False,status_code=None))
         await b.ack(robot)
         await asyncio.sleep(.04)
         first=(await b.claim('worker-a',1))['tasks'][0]

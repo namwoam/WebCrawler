@@ -14,6 +14,7 @@ from prometheus_client import start_http_server
 from .backend import AsyncBackend
 from .metrics import WORKER, CAPACITY, ACTIVE_DOMAINS, AUTOTHROTTLE, sample_runtime
 from .policy import routing
+from . import profiling
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +45,14 @@ class Frontier:
         self.poller = None
         self.session = None
         self.loki = None
+        self.profile_loop = None
 
     def start(self):
         import os
         from .loki import start_loki
         self.loki = start_loki()
+        if profiling.ENABLED:
+            self.profile_loop = asyncio.create_task(profiling.watch_loop('worker'))
         start_http_server(int(os.getenv('METRICS_PORT','9101')), addr='0.0.0.0')
         from scrapy.extensions.throttle import AutoThrottle
         AUTOTHROTTLE.set(int(self.crawler.get_extension(AutoThrottle) is not None))
@@ -149,6 +153,9 @@ class Frontier:
             await self.session.close()
         if self.loki:
             await self.loki.stop()
+        if self.profile_loop:
+            self.profile_loop.cancel()
+            await asyncio.gather(self.profile_loop,return_exceptions=True)
         await self.backend.client.aclose()
 
 

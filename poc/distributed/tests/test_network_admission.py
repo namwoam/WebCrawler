@@ -30,7 +30,8 @@ async def setup_backend(concurrency=2, count=3):
     tasks = tasks_for('job', payload)
     for task in tasks:
         task.update(interval=1, concurrency=concurrency)
-    await backend.client.hset('poc:origins:v2', tasks[0]['origin_id'], json.dumps({'state': 'ready'}))
+    await backend.client.hset('poc:origins:v3', tasks[0]['origin_id'], json.dumps({'state': 'ready', 'generation': 'test'}))
+    await backend.client.set('poc:robots:body:'+tasks[0]['origin_id']+':test','cached')
     enqueue = backend.client.register_script(scripts.ENQUEUE)
     await enqueue(args=[json.dumps(dict(id='job', created_at=stamp.isoformat(),
         expires=(stamp + timedelta(days=1)).timestamp(), tasks=tasks))])
