@@ -86,12 +86,30 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "reqps"
+          "unit": "reqps",
+          "decimals": 2,
+          "custom": {
+            "filterable": true,
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Domain"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 9,
@@ -101,15 +119,18 @@
       },
       "id": 2,
       "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "QPS",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false,
+          "enablePagination": true,
+          "reducer": []
         }
       },
       "targets": [
@@ -118,15 +139,33 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(10, sum by(domain)(count_over_time({service=\"crawler-poc\",worker_id=~\"$worker_id\",event=\"request.start\"} | json domain=\"domain\" [5s])) / 5)",
-          "legendFormat": "{{domain}}",
           "refId": "A",
-          "queryType": "instant"
+          "queryType": "instant",
+          "legendFormat": "{{domain}}",
+          "expr": "sum by(domain)(count_over_time({service=\"crawler-poc\",worker_id=~\"$worker_id\",event=\"request.start\"} | json domain=\"domain\" | __error__=\"\" | keep domain [5s])) / 5"
         }
       ],
-      "title": "QPS per domain (top 10, last 5s)",
-      "type": "bargauge",
-      "description": "Current top ten domains by HTTP starts per second over the last five seconds. This is a live snapshot; other request charts use one-minute windows."
+      "title": "QPS per domain (all active domains, last 5s)",
+      "type": "table",
+      "description": "One row per domain with HTTP starts in the last five seconds, averaged per second. Includes robots, retries and redirects. Use the Domain column filter to find a host. Inactive domains are absent from this live snapshot; this is not a full benchmark history.",
+      "transformations": [
+        {
+          "id": "seriesToRows",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Metric": "Domain",
+              "Value": "QPS"
+            }
+          }
+        }
+      ]
     },
     {
       "datasource": {

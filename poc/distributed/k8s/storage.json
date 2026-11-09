@@ -15,7 +15,7 @@
     "storageClassName": "crawler-poc-pool",
     "resources": {
       "requests": {
-        "storage": "200Gi"
+        "storage": "250Gi"
       }
     }
   }

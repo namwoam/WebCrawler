@@ -10,6 +10,28 @@ PROM = {'type':'prometheus','uid':'crawler-poc-prometheus'}
 LOKI = {'type':'loki','uid':'loki'}
 
 
+def configure_domain_panel(panel):
+    """List every active domain without a top-k truncation or worker label fan-out."""
+    panel.update(type='table',title='QPS per domain (all active domains, last 5s)',
+        description='One row per domain with HTTP starts in the last five seconds, averaged per second. Includes robots, retries and redirects. Use the Domain column filter to find a host. Inactive domains are absent from this live snapshot; this is not a full benchmark history.')
+    panel.pop('interval',None)
+    panel.pop('maxDataPoints',None)
+    panel['fieldConfig'] = dict(defaults=dict(unit='reqps',decimals=2,
+        custom=dict(filterable=True,align='auto',cellOptions=dict(type='auto'))),
+        overrides=[dict(matcher=dict(id='byName',options='Domain'),
+            properties=[dict(id='unit',value='string')])])
+    panel['options'] = dict(showHeader=True,cellHeight='sm',
+        sortBy=[dict(displayName='QPS',desc=True)],
+        footer=dict(show=False,enablePagination=True,reducer=[]))
+    panel['transformations'] = [dict(id='seriesToRows',options={}),
+        dict(id='organize',options=dict(excludeByName={'Time':True},
+            renameByName={'Metric':'Domain','Value':'QPS'}))]
+    panel['targets'] = [dict(datasource=LOKI,refId='A',queryType='instant',
+        legendFormat='{{domain}}',
+        expr='sum by(domain)(count_over_time({service="crawler-poc",worker_id=~"$worker_id",event="request.start"} | json domain="domain" | __error__="" | keep domain [5s])) / 5')]
+    panel['datasource'] = LOKI
+
+
 def build_dashboard(source, target):
     dashboard = copy.deepcopy(source)
     dashboard.update(id=target['id'],uid=target['uid'],title=target['title'],
@@ -37,17 +59,7 @@ def build_dashboard(source, target):
                 query['datasource'] = LOKI
                 query['expr'] = query['expr'].replace('service="crawler"','service="crawler-poc"')
             if panel['id']==2:
-                # A minute across this corpus exceeds shared Loki's 10k series
-                # limit. A five-second instant top-k stays bounded under load.
-                panel.update(type='bargauge',title='QPS per domain (top 10, last 5s)',
-                    description='Current top ten domains by HTTP starts per second over the last five seconds. This is a live snapshot; other request charts use one-minute windows.')
-                panel.pop('interval',None)
-                panel.pop('maxDataPoints',None)
-                panel['fieldConfig']['defaults'].pop('custom',None)
-                panel['options'] = dict(orientation='horizontal',displayMode='gradient',
-                    showUnfilled=True,reduceOptions=dict(calcs=['lastNotNull'],fields='',values=False))
-                panel['targets'][0].update(queryType='instant',
-                    expr='topk(10, sum by(domain)(count_over_time({service="crawler-poc",worker_id=~"$worker_id",event="request.start"} | json domain="domain" [5s])) / 5)')
+                configure_domain_panel(panel)
             if panel['id']==5:
                 panel['targets'][0]['expr'] = '{service="crawler-poc",worker_id=~"$worker_id",level=~"ERROR|WARNING"}'
             if panel['id']==3:

@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 
 NS = 'crawler-poc'
-IMAGE = os.getenv('POC_IMAGE', 'docker.io/crawler-poc/app:0.11')
+IMAGE = os.getenv('POC_IMAGE', 'docker.io/crawler-poc/app:0.17')
+PROFILE = os.getenv('CRAWLER_PROFILE_ENABLED','').lower() in ('1','true','yes')
 items = []
 
 def add(kind, name, spec, api='v1'):
@@ -36,12 +37,23 @@ def resources(cpu,mem,limit_cpu,limit_mem):
     return dict(requests=dict(cpu=cpu,memory=mem),limits=dict(cpu=limit_cpu,memory=limit_mem))
 
 common=[dict(name='VALKEY_URL',value='redis://crawler-valkey:6379/0'),
+        dict(name='ROBOTS_CACHE_TTL_SECONDS',value='86400'),
+        dict(name='ROBOTS_FAILURE_TTL_SECONDS',value='300'),
+        dict(name='ROBOTS_CACHE_MAX_BYTES',value=str(3*1024**3)),
+        dict(name='ROBOTS_CACHE_MAX_ENTRIES',value='500000'),
+        dict(name='TASK_STATE_RETENTION_SECONDS',value='3600'),
+        dict(name='JOB_RETENTION_GRACE_SECONDS',value='3600'),
+        dict(name='IDLE_HOST_TTL_SECONDS',value='600'),
+        dict(name='MAX_PENDING_URLS',value='100000'),
         dict(name='WORKER_TOKEN',valueFrom=dict(secretKeyRef=dict(name='crawler-poc-worker',key='token')))]
+if PROFILE:
+    common.append(dict(name='CRAWLER_PROFILE_ENABLED',value='true'))
 
 deploy('crawler-valkey',dict(name='valkey',image='valkey/valkey:9.1.3',
     command=['valkey-server','--bind','0.0.0.0','--protected-mode','no','--appendonly','yes',
-             '--appendfsync','everysec','--dir','/data','--maxmemory','3072mb','--maxmemory-policy','noeviction'],
-    resources=resources('500m','512Mi','2','4Gi'),ports=[dict(name='valkey',containerPort=6379)],
+             '--appendfsync','everysec','--dir','/data','--maxmemory','6144mb','--maxmemory-policy','noeviction',
+             '--io-threads','4'],
+    resources=resources('500m','512Mi','4','8Gi'),ports=[dict(name='valkey',containerPort=6379)],
     volumeMounts=[dict(name='data',mountPath='/data',subPath='valkey')],
     readinessProbe=dict(exec=dict(command=['valkey-cli','ping']),initialDelaySeconds=2)),volume=True)
 service('crawler-valkey',6379)
@@ -53,6 +65,12 @@ deploy('crawler-api',dict(name='api',image=IMAGE,imagePullPolicy='IfNotPresent',
     volumeMounts=[dict(name='data',mountPath='/data',subPath='crawl')],
     readinessProbe=dict(httpGet=dict(path='/healthz',port=8080),initialDelaySeconds=3)),volume=True)
 service('crawler-api',8080)
+if PROFILE:
+    api_deployment=next(item for item in items if item['kind']=='Deployment' and item['metadata']['name']=='crawler-api')
+    api_pod=api_deployment['spec']['template']['spec']
+    api_pod['volumes'].append(dict(name='profile-metrics',emptyDir=dict(medium='Memory',sizeLimit='64Mi')))
+    api_pod['containers'][0]['volumeMounts'].append(dict(name='profile-metrics',mountPath='/profile-metrics'))
+    api_pod['containers'][0]['env']=api_pod['containers'][0]['env']+[dict(name='PROMETHEUS_MULTIPROC_DIR',value='/profile-metrics')]
 
 deploy('crawler-worker',dict(name='worker',image=IMAGE,imagePullPolicy='IfNotPresent',
     env=common+[dict(name='POD_NAME',valueFrom=dict(fieldRef=dict(fieldPath='metadata.name'))),

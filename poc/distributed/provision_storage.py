@@ -97,5 +97,5 @@ spec:
         "name": "crawler-poc-html", "namespace": "crawler-poc",
         "labels": {"app.kubernetes.io/part-of": "crawler-poc"}},
     "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "crawler-poc-pool",
-             "resources": {"requests": {"storage": "200Gi"}}}}, indent=2))
-print("Rendered isolated quota-backed provisioner and dynamic 200Gi HTML claim")
+             "resources": {"requests": {"storage": "250Gi"}}}}, indent=2))
+print("Rendered isolated quota-backed provisioner and dynamic 250Gi HTML claim")

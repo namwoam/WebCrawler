@@ -49,9 +49,11 @@
                   "--dir",
                   "/data",
                   "--maxmemory",
-                  "3072mb",
+                  "6144mb",
                   "--maxmemory-policy",
-                  "noeviction"
+                  "noeviction",
+                  "--io-threads",
+                  "4"
                 ],
                 "resources": {
                   "requests": {
@@ -59,8 +61,8 @@
                     "memory": "512Mi"
                   },
                   "limits": {
-                    "cpu": "2",
-                    "memory": "4Gi"
+                    "cpu": "4",
+                    "memory": "8Gi"
                   }
                 },
                 "ports": [
@@ -99,7 +101,7 @@
             "initContainers": [
               {
                 "name": "prepare",
-                "image": "docker.io/crawler-poc/app:0.11",
+                "image": "docker.io/crawler-poc/app:0.17",
                 "imagePullPolicy": "IfNotPresent",
                 "command": [
                   "python",
@@ -183,7 +185,7 @@
             "containers": [
               {
                 "name": "api",
-                "image": "docker.io/crawler-poc/app:0.11",
+                "image": "docker.io/crawler-poc/app:0.17",
                 "imagePullPolicy": "IfNotPresent",
                 "command": [
                   "python",
@@ -203,6 +205,38 @@
                   {
                     "name": "VALKEY_URL",
                     "value": "redis://crawler-valkey:6379/0"
+                  },
+                  {
+                    "name": "ROBOTS_CACHE_TTL_SECONDS",
+                    "value": "86400"
+                  },
+                  {
+                    "name": "ROBOTS_FAILURE_TTL_SECONDS",
+                    "value": "300"
+                  },
+                  {
+                    "name": "ROBOTS_CACHE_MAX_BYTES",
+                    "value": "3221225472"
+                  },
+                  {
+                    "name": "ROBOTS_CACHE_MAX_ENTRIES",
+                    "value": "500000"
+                  },
+                  {
+                    "name": "TASK_STATE_RETENTION_SECONDS",
+                    "value": "3600"
+                  },
+                  {
+                    "name": "JOB_RETENTION_GRACE_SECONDS",
+                    "value": "3600"
+                  },
+                  {
+                    "name": "IDLE_HOST_TTL_SECONDS",
+                    "value": "600"
+                  },
+                  {
+                    "name": "MAX_PENDING_URLS",
+                    "value": "100000"
                   },
                   {
                     "name": "WORKER_TOKEN",
@@ -262,7 +296,7 @@
             "initContainers": [
               {
                 "name": "prepare",
-                "image": "docker.io/crawler-poc/app:0.11",
+                "image": "docker.io/crawler-poc/app:0.17",
                 "imagePullPolicy": "IfNotPresent",
                 "command": [
                   "python",
@@ -350,12 +384,44 @@
             "containers": [
               {
                 "name": "worker",
-                "image": "docker.io/crawler-poc/app:0.11",
+                "image": "docker.io/crawler-poc/app:0.17",
                 "imagePullPolicy": "IfNotPresent",
                 "env": [
                   {
                     "name": "VALKEY_URL",
                     "value": "redis://crawler-valkey:6379/0"
+                  },
+                  {
+                    "name": "ROBOTS_CACHE_TTL_SECONDS",
+                    "value": "86400"
+                  },
+                  {
+                    "name": "ROBOTS_FAILURE_TTL_SECONDS",
+                    "value": "300"
+                  },
+                  {
+                    "name": "ROBOTS_CACHE_MAX_BYTES",
+                    "value": "3221225472"
+                  },
+                  {
+                    "name": "ROBOTS_CACHE_MAX_ENTRIES",
+                    "value": "500000"
+                  },
+                  {
+                    "name": "TASK_STATE_RETENTION_SECONDS",
+                    "value": "3600"
+                  },
+                  {
+                    "name": "JOB_RETENTION_GRACE_SECONDS",
+                    "value": "3600"
+                  },
+                  {
+                    "name": "IDLE_HOST_TTL_SECONDS",
+                    "value": "600"
+                  },
+                  {
+                    "name": "MAX_PENDING_URLS",
+                    "value": "100000"
                   },
                   {
                     "name": "WORKER_TOKEN",
@@ -513,7 +579,7 @@
             "containers": [
               {
                 "name": "mock",
-                "image": "docker.io/crawler-poc/app:0.11",
+                "image": "docker.io/crawler-poc/app:0.17",
                 "imagePullPolicy": "IfNotPresent",
                 "command": [
                   "python",
