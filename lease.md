@@ -116,7 +116,7 @@ A redirect to a new host must pass that host's admission checks and robots handl
 | `poc:job:<job_id>` | Hash | Job status, expiration, timestamps, and counters |
 | `poc:recovery-lock` | Expiring string | Coordinates recovery attempts |
 
-The score in `poc:ready` is a scheduling hint. `CLAIM` checks host capacity before reserving a slot; `START_NETWORK` enforces the authoritative rate clock immediately before HTTP.
+New ready entries use the current server timestamp so newly submitted hosts do not overtake already-ready pages and cause cache churn. The score in `poc:ready` is a scheduling hint. `CLAIM` checks host capacity before reserving a slot; `START_NETWORK` enforces the authoritative rate clock immediately before HTTP.
 
 ## Guarantees and limits
 
@@ -125,6 +125,22 @@ The score in `poc:ready` is a scheduling hint. `CLAIM` checks host capacity befo
 - **Separate storage and acknowledgement:** filesystem writes and the Valkey acknowledgement are separate operations. A failure between them can cause another fetch and result replacement; they do not form an exactly once transaction.
 - **Cancellation is cooperative:** the download handler checks cancellation before HTTP execution. Cancellation does not immediately stop every download already in progress.
 - **Recovery requires a running worker and Valkey:** deadline passage alone does not execute the recovery script.
+
+## Cache and state retention
+
+Robots responses are compressed into separate `poc:robots:body:<origin>:<generation>` keys. Successful responses expire after 19.2–24 hours; failed fetches and HTTP 5xx responses use a 4–5 minute TTL. Reads do not extend freshness. The cache has a 3 GiB compressed-payload budget and a 500,000-entry limit; its LRU eviction removes only robots-body keys. Byte accounting is conservative until expired entries are collected in bounded batches. Valkey itself retains `noeviction` for scheduler state.
+
+`poc:origins:v3` contains small, per-origin readiness fields. Ready fields expire with their bodies and are removed when the matching cached generation is evicted; pending refresh ownership is preserved. Missing or evicted bodies cause an atomic, deduplicated robots refetch in `ENQUEUE`, `CLAIM`, or `REQUEUE`; queued pages wait for the replacement. A cache miss between claim and middleware returns the URL to the frontier. Generation and lease ownership checks reject late writes from recovered robots workers. Pending robots metadata and pending/leased task states do not expire.
+
+Completed/cancelled task tombstones expire after one hour, exceeding the 180-second lease and recovery window. Expired tombstones cannot make a task pending again: job metadata prevents republication and stale tokens no longer have leases. Job metadata remains until the API retires the manifest/results and discounts HTML bytes, then its cancellation tombstone expires after one hour. Idle host rate clocks expire after ten idle minutes, renewed only by actual HTTP admission. A bounded maintenance pass adds retention to legacy terminal states and host clocks without extending existing TTLs.
+
+Deployment settings: `ROBOTS_CACHE_TTL_SECONDS=86400`, `ROBOTS_FAILURE_TTL_SECONDS=300`, `ROBOTS_CACHE_MAX_BYTES=3221225472`, `ROBOTS_CACHE_MAX_ENTRIES=500000`, `TASK_STATE_RETENTION_SECONDS=3600`, `JOB_RETENTION_GRACE_SECONDS=3600`, `IDLE_HOST_TTL_SECONDS=600`, `MAX_PENDING_URLS=100000`. Terminal retention has a 360-second minimum. The in-memory frontier admits at most 100,000 pending URLs; further accepted jobs stay in the durable filesystem outbox and are retried without partially enqueueing a job. The main Valkey remains at an 8 GiB container limit and 6 GiB `maxmemory`; the cache payload budget excludes key/index/allocator overhead. Cache size, entry budgets and events are exported as `crawler_robots_cache_*` metrics.
+
+For the v2 → v3 upgrade, quiesce workers and verify no active leases or pending URLs before replacing API/workers together. Retire the old `poc:origins:v2` cache only after all processes use v3. This deliberately starts a cold cache and preserves job results and scheduler ownership. `verify_retention.py` verifies real expiry/refetch/eviction on an empty isolated Valkey DB 15; `verify_alignment.py` checks native HTTP and robots behavior on the POC mock target.
+
+## Dispatcher and admission efficiency
+
+The API scanner uses a token-owned 30-second lease, renewed every ten seconds and released only by its owner. A lost lease stops the scan before its next job. Robots-blocked hosts are rechecked at one-second intervals and woken immediately at their original admission priority when rules arrive, including redirected robots fetches. Each claim examines at most 64 queue candidates and returns up to 16 tasks, subject to worker capacity, the 30-domain limit and existing per-host network reservations. Concurrent DNS lookups for the same name share one native resolver operation, with independent cancellation; DNS failures remain retryable and are not negatively cached.
 
 ## Implementation references
 
