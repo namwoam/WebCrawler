@@ -16,6 +16,8 @@ def value_queue(monkeypatch):
         "download_slot": "valuable", "max_concurrent_requests": 2}}}})
     monkeypatch.setattr(SitePolicies, "load", lambda: policies)
     downloader = SimpleNamespace(slots={}, active=set(), get_slot_key=lambda request: urlsplit(request.url).hostname)
+    downloader.slots["valuable"] = SimpleNamespace(
+        active=set(), transferring=downloader.active, queue=[], concurrency=2)
     crawler = SimpleNamespace(settings=Settings(), engine=SimpleNamespace(downloader=downloader))
     queue = ValuePriorityQueue(crawler, FifoMemoryQueue, "")
     yield queue, downloader
@@ -116,6 +118,8 @@ def test_seven_request_slot_reserves_six_normal_and_one_manual(monkeypatch):
         "download_slot": "valuable", "max_concurrent_requests": 7}}}})
     monkeypatch.setattr(SitePolicies, "load", lambda: policies)
     downloader = SimpleNamespace(slots={}, active=set(), get_slot_key=lambda request: urlsplit(request.url).hostname)
+    downloader.slots["valuable"] = SimpleNamespace(
+        active=set(), transferring=downloader.active, queue=[], concurrency=7)
     crawler = SimpleNamespace(settings=Settings(), engine=SimpleNamespace(downloader=downloader))
     normal = ValuePriorityQueue(crawler, FifoMemoryQueue, "")
     manual = ManualValuePriorityQueue(crawler, FifoMemoryQueue, "")
@@ -131,3 +135,86 @@ def test_seven_request_slot_reserves_six_normal_and_one_manual(monkeypatch):
     finally:
         normal.close()
         manual.close()
+
+
+def test_delayed_high_priority_slot_leaves_downloader_room_for_other_domains(value_queue):
+    queue, downloader = value_queue
+    waiting = Request("https://en.example.com/waiting")
+    downloader.active.add(waiting)
+    slot = downloader.slots["valuable"]
+    slot.transferring = set()
+    slot.queue = [(waiting, None)]
+    high = Request("https://en.example.com/high", priority=1000)
+    low = Request("https://other.example.net/low", priority=1)
+    queue.push(high)
+    queue.push(low)
+    assert queue.pop() is low
+    assert queue.pop() is None
+    # Once the existing waiter transfers, highest-value admission resumes.
+    slot.queue.clear()
+    slot.transferring.add(waiting)
+    assert queue.pop() is high
+
+
+def test_middleware_waiter_counts_before_downloader_slot_exists(value_queue):
+    queue, downloader = value_queue
+    first = Request("https://new.example.net/first")
+    second = Request("https://new.example.net/second")
+    queue.push(first)
+    queue.push(second)
+    assert queue.pop() is first
+    downloader.active.add(first)
+    assert queue.pop() is None
+    downloader.slots["new.example.net"] = SimpleNamespace(
+        active={first}, transferring={first}, queue=[], concurrency=16)
+    assert queue.pop() is second
+
+
+def test_admission_uses_live_downloader_concurrency_when_lower_than_policy(value_queue):
+    queue, downloader = value_queue
+    slot = downloader.slots["valuable"]
+    slot.concurrency = 1
+    first = Request("https://en.example.com/first")
+    second = Request("https://en.example.com/second")
+    queue.push(first)
+    queue.push(second)
+    assert queue.pop() is first
+    downloader.active.add(first)
+    assert queue.pop() is None
+
+
+def test_waiters_share_one_wakeup_and_stop_waking_after_engine_closes(value_queue, monkeypatch):
+    from unittest.mock import Mock
+    from twisted.internet import reactor
+    from twisted.internet.task import Clock
+    queue, downloader = value_queue
+    clock = Clock()
+    monkeypatch.setattr(reactor, "callLater", clock.callLater)
+    engine = queue.crawler.engine
+    engine._slot = SimpleNamespace(nextcall=SimpleNamespace(schedule=Mock()))
+    engine.running = True
+    queue._wake_after_wait()
+    queue._wake_after_wait()
+    assert len(clock.getDelayedCalls()) == 1
+    clock.advance(0.05)
+    engine._slot.nextcall.schedule.assert_called_once()
+    queue._wake_after_wait()
+    schedule = engine._slot.nextcall.schedule
+    engine._slot = None
+    clock.advance(0.05)
+    schedule.assert_called_once()
+
+
+def test_live_delayed_priority_work_leaves_capacity_for_other_domains():
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[3]
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "helpers/value_admission_runner.py")],
+        cwd=root / "containers/crawler",
+        env={**os.environ, "PYTHONPATH": f"{root}:{root / 'containers/crawler'}"},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

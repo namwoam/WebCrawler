@@ -61,6 +61,23 @@ class ValuePriorityQueue(DownloaderAwarePriorityQueue):
             self.pqueues[slot] = self.pqfactory(slot)
         self.pqueues[slot].push(request)
 
+    def _wake_after_wait(self):
+        # A queued download starting does not wake Scrapy's engine. Keep one
+        # crawler-wide timer so admission can refill a slot without waiting for
+        # an entire response or the engine's five-second idle heartbeat.
+        engine = self.crawler.engine
+        if (getattr(engine, "_slot", None) is None
+                or getattr(self.crawler, "_inventory_admission_wakeup", None) is not None):
+            return
+        from twisted.internet import reactor
+
+        def wake():
+            self.crawler._inventory_admission_wakeup = None
+            if getattr(engine, "_slot", None) is not None and getattr(engine, "running", False):
+                engine._slot.nextcall.schedule()
+
+        self.crawler._inventory_admission_wakeup = reactor.callLater(0.05, wake)
+
     def _choose(self):
         if not self.pqueues:
             return None
@@ -84,6 +101,17 @@ class ValuePriorityQueue(DownloaderAwarePriorityQueue):
             active = own_active + other_active
             slot = downloader.slots.get(actual)
             active = max(active, len(slot.active) if slot is not None else 0)
+            # Admit at most one request waiting to transfer per policy slot,
+            # including middleware waiters from either source. Downloader delay
+            # and AutoThrottle remain responsible for actual network timing.
+            transferring = len(slot.transferring) if slot is not None else 0
+            waiting = active - transferring
+            if slot is not None:
+                cap = min(cap, slot.concurrency)
+                waiting = max(waiting, len(slot.queue))
+            if waiting >= 1:
+                self._wake_after_wait()
+                continue
             dispatch_policy = getattr(self.crawler, "_inventory_dispatch_policy", "weighted")
             other_waiting = other_active > 0 or any(
                 actual in q.pqueues for q in self.crawler._inventory_source_queues[other_source])

@@ -121,6 +121,15 @@ work uses the remainder. Either source can borrow spare slots when the other
 has no work. Balanced selection uses equal shares; the explicit source-first
 policies retain their precedence.
 
+Admission allows at most one waiting request per policy slot in addition to
+actual transfers, counting both downloader queues and middleware waiters across
+sources. Further backlog stays in the scheduler, allowing other domains to use
+global downloader capacity while a valuable site's delay is running. Selection
+still prefers the highest-value admissible request. A single crawler-wide 50 ms
+wakeup allows admission to resume when a waiting request starts transferring;
+otherwise Scrapy may wait until a response completes or its five-second engine
+heartbeat. This timer does not initiate transfers or bypass downloader delays.
+
 This branch builds on `namwoam:perf/link-processing` (PR #142), using its bounded
 HTML parser process pool and shutdown handling. It does not add a second parser
 pool implementation or change crawler site-policy limits.
