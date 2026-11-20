@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures.process import BrokenProcessPool
+import time
 
 from w3lib.url import canonicalize_url
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from crawler.manual_bulk_crawls import ManualBulkCrawlConsumer
 from crawler.spiders.parser import HtmlParserPool
 from libs.obslog import configure as configure_logging
 from libs.urls import domain_of, host_of
+from libs.ipc.demand import DemandTracker
 
 logger = logging.getLogger("crawler")
 
@@ -43,6 +45,8 @@ class HtmlSpider(scrapy.Spider):
         self._pending_requests = 0
         self._max_pending_requests = 0
         self._domain_pending: dict[int, int] = {}
+        self.demand_tracker = None
+        self.items_written = self.items_ok = 0
         self._heartbeat_task: twisted_task.LoopingCall | None = None
         self._top_up_task: twisted_task.LoopingCall | None = None
         # Results written to crawl_result since the last heartbeat (JsonPipeline).
@@ -56,6 +60,12 @@ class HtmlSpider(scrapy.Spider):
 
         qtpl = crawler.settings["URL_QUEUE_TEMPLATE"]
         spider.queue = QueueConsumer(queue_dir=qtpl.format(id=spider.crawler_id))
+        if crawler.settings.getbool("IPC_DEMAND_ENABLED", False):
+            spider.demand_tracker = DemandTracker(
+                horizon_sec=crawler.settings.getint("IPC_DEMAND_HORIZON_SEC", 180),
+                max_domain_urls=crawler.settings.getint("IPC_DEMAND_MAX_DOMAIN_URLS", 2000),
+            )
+            spider.demand_max_pending = crawler.settings.getint("IPC_DEMAND_MAX_PENDING_URLS", 32000)
         spider.manual_bulk_crawls = ManualBulkCrawlConsumer(spider)
         spider.html_parser_pool = HtmlParserPool(
             crawler.settings.getint("PARSER_PROCESSES", 4),
@@ -70,6 +80,9 @@ class HtmlSpider(scrapy.Spider):
         crawler.signals.connect(spider.req_scheduled, signal=signals.request_scheduled)
         crawler.signals.connect(spider.req_start, signal=signals.request_reached_downloader)
         crawler.signals.connect(spider.req_end, signal=signals.response_received)
+        if spider.demand_tracker is not None:
+            crawler.signals.connect(spider._headers_received, signal=signals.headers_received)
+            crawler.signals.connect(spider._body_received, signal=signals.response_downloaded)
         crawler.signals.connect(spider.req_dropped, signal=signals.request_dropped)
         crawler.signals.connect(spider.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
@@ -121,7 +134,7 @@ class HtmlSpider(scrapy.Spider):
             "slot_active": slot_active,
             "slots": len(slots),
         }
-    
+
     def _count_domains_at_limit(self) -> int:
         downloader = getattr(getattr(self.crawler, "engine", None), "downloader", None)
         slots = getattr(downloader, "slots", {}) or {}
@@ -200,6 +213,8 @@ class HtmlSpider(scrapy.Spider):
             callback=self.parse,
             errback=self.errback,
             meta={"source_url": url, "_track_domain_id": domain_id},
+            priority=(int(self.queue.priorities.get(domain_id, 0) * 1000000)
+                      if self.demand_tracker is not None else 0),
         )
 
     def _response_metadata(self, response) -> dict:
@@ -236,23 +251,47 @@ class HtmlSpider(scrapy.Spider):
         if self._parser_failed:
             return []
         needs_domains = len(self._domain_pending) < self.domain_low_watermark
-        if not force and not needs_domains:
+        tracker = self.demand_tracker
+        if not force and not needs_domains and tracker is None:
             return []
 
         pending_before = self._pending_requests
+        batch = {}
+        capacity = None
+        if tracker is not None:
+            capacity = max(0, self.demand_max_pending - pending_before)
+            # Admit requested replenishments even if unrelated slow domains keep
+            # the domain-count watermark high. One live batch per domain remains.
+            if capacity:
+                batch = self.queue.pop_domain_batches(
+                    # A small tail remains queued while the next offer is loaded,
+                    # avoiding an idle interval when the previous batch drains.
+                    limit=16, exclude_domain_ids={key for key, count in self._domain_pending.items() if count > 100},
+                    priority_only=True, max_urls=capacity,
+                )
+                capacity -= sum(len(urls) for urls in batch.values())
         slots = self.domain_low_watermark - len(self._domain_pending)
+        slots = max(0, slots - len(batch))
+        if tracker is not None and capacity and not batch:
+            # URL inventory is the backpressure bound. A domain-count watermark
+            # must not indefinitely exclude newly discovered valuable work.
+            slots = max(1, slots)
         if slots <= 0:
             slots = 1 if force else 0
-        if slots <= 0:
+        if slots <= 0 and not batch:
             return []
 
-        batch = self.queue.pop_domain_batches(
-            limit=slots,
-            exclude_domain_ids=set(self._domain_pending.keys()),
-        )
+        if slots > 0:
+            batch.update(self.queue.pop_domain_batches(
+                limit=slots,
+                exclude_domain_ids=set(self._domain_pending) | set(batch),
+                max_urls=capacity,
+            ))
 
         reserved: list[tuple[int, str]] = []
         for domain_id, urls in batch.items():
+            if tracker is not None:
+                tracker.admitted(domain_id)
             for url in urls:
                 reserved.append((domain_id, url))
             self._pending_requests += len(urls)
@@ -287,6 +326,8 @@ class HtmlSpider(scrapy.Spider):
     def _finish_owned_request(self, reason: str, domain_id: int = 0) -> None:
         self._pending_requests = max(0, self._pending_requests - 1)
         if domain_id and domain_id in self._domain_pending:
+            if self.demand_tracker is not None:
+                self.demand_tracker.finished(domain_id)
             self._domain_pending[domain_id] -= 1
             if self._domain_pending[domain_id] <= 0:
                 del self._domain_pending[domain_id]
@@ -381,6 +422,8 @@ class HtmlSpider(scrapy.Spider):
             "spider.heartbeat",
             extra={
                 "event": "spider.heartbeat",
+                "items_written": items_written,
+                "items_ok": items_ok,
                 "parser_inflight": self.html_parser_pool.inflight,
                 "parser_waiting": self.html_parser_pool.waiting,
                 "active_domains": len(self._domain_pending),
@@ -417,7 +460,23 @@ class HtmlSpider(scrapy.Spider):
             yield self._build_request(url, domain_id)
 
     def _periodic_top_up(self):
-        if len(self._domain_pending) < self.domain_low_watermark:
+        try:
+            self._periodic_top_up_once()
+        except Exception:
+            # LoopingCall stops permanently if a callback raises. A bad offer
+            # must not disable demand publication or all future replenishment.
+            logger.exception("crawler.refill_error", extra={"event": "crawler.refill_error"})
+
+    def _periodic_top_up_once(self):
+        if self.demand_tracker is not None:
+            try:
+                self.demand_tracker.publish(
+                    str(self.queue.queue_dir), self._domain_pending,
+                    self.demand_max_pending - self._pending_requests,
+                )
+            except OSError:
+                logger.exception("crawler.demand_error", extra={"event": "crawler.demand_error"})
+        if self.demand_tracker is not None or len(self._domain_pending) < self.domain_low_watermark:
             self._maybe_top_up(reason="periodic")
 
     def on_idle(self):
@@ -550,6 +609,7 @@ class HtmlSpider(scrapy.Spider):
     def req_start(self, request):
         t = datetime.now()
         request.meta["t_down_start"] = t
+        slot = self.crawler.engine.downloader.slots.get(request.meta.get("download_slot"))
         logger.info(
             "request.start",
             extra={
@@ -557,13 +617,16 @@ class HtmlSpider(scrapy.Spider):
                 "url": request.url,
                 "domain": host_of(request.url),
                 "source": _source(request),
+                "slot_delay_sec": getattr(slot, "delay", None),
+                "slot_transferring": len(slot.transferring) if slot is not None else None,
+                "slot_queued": len(slot.queue) if slot is not None else None,
             },
         )
     def req_end(self, response, request):
         t = datetime.now()
         started = request.meta.get("t_down_start", t)
         downloader_total_ms = int((t - started).total_seconds() * 1000)
-        
+
         download_latency = response.meta.get("download_latency")
         download_latency_ms = (
             int(download_latency * 1000) if download_latency is not None else None
@@ -582,5 +645,15 @@ class HtmlSpider(scrapy.Spider):
                     downloader_total_ms - download_latency_ms
                     if download_latency_ms is not None else None
                 ),
+                "body_download_ms": request.meta.get("_inventory_body_ms"),
+                "response_bytes": len(response.body),
             },
         )
+
+    def _headers_received(self, headers, body_length, request, spider=None):
+        request.meta["_inventory_headers_at"] = time.monotonic()
+
+    def _body_received(self, response, request, spider=None):
+        started = request.meta.pop("_inventory_headers_at", None)
+        if started is not None:
+            request.meta["_inventory_body_ms"] = round((time.monotonic() - started) * 1000, 3)

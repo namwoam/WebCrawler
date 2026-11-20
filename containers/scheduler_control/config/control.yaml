@@ -18,6 +18,15 @@ offerer:
   low_watermark_domains: 120
   per_domain_url_cap: 100
 
+  # Consumer demand fast path; enable together with crawler IPC_DEMAND_ENABLED.
+  # No site policies or crawler rate limits are read by the offerer.
+  demand_refill_enabled: false
+  demand_url_budget: 10000
+  demand_per_domain_cap: 2000
+  demand_domain_slots: 16
+  # Bounded annealing starts from greedy; MIP remains opt-in.
+  demand_allocation_method: annealing
+
 
 postgres:
   dsn: "postgresql+psycopg2://yugabyte:yugabyte@172.16.191.3:5433/crawlerdb"

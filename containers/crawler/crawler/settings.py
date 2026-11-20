@@ -128,6 +128,11 @@ ITEM_PIPELINES = {
 }
 
 URL_QUEUE_TEMPLATE = "/data/ipc/url_queue/crawler_{id:02d}"
+IPC_DEMAND_ENABLED = os.getenv("IPC_DEMAND_ENABLED", "false").lower() == "true"
+# Consumer-owned inventory targets, independent of request-rate enforcement.
+IPC_DEMAND_HORIZON_SEC = 180
+IPC_DEMAND_MAX_DOMAIN_URLS = 2000
+IPC_DEMAND_MAX_PENDING_URLS = 32000
 RESULT_DIR_TEMPLATE = "/data/ipc/crawl_result/crawler_{id:02d}"
 # Transport location and resource limits belong to the crawler. Per-job output
 # destinations arrive in the queue payload, without reading API configuration.

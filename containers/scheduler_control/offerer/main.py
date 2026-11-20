@@ -54,7 +54,8 @@ def main() -> None:
     if strategy_name == "read_only":
         selector = ReadOnlyStrategy(Session=Session)
     elif strategy_name == "golden_discovery_ranker_v1":
-        selector = GoldenDiscoveryRankerV1Strategy(Session=Session)
+        selector = GoldenDiscoveryRankerV1Strategy(
+            Session=Session, use_url_priority=bool(offerer.get("demand_refill_enabled", False)))
     else:
         selector = ExampleStrategy(Session=Session)
 
@@ -73,6 +74,11 @@ def main() -> None:
         stats_dir=str(offerer.get("stats_dir", "/data/ipc/stats")),
         peek_multiplier=int(offerer.get("peek_multiplier", 3)),
         peek_hard_cap=int(offerer.get("peek_hard_cap", 1000)),
+        demand_refill_enabled=bool(offerer.get("demand_refill_enabled", False)),
+        demand_url_budget=int(offerer.get("demand_url_budget", 10000)),
+        demand_per_domain_cap=int(offerer.get("demand_per_domain_cap", 2000)),
+        demand_domain_slots=int(offerer.get("demand_domain_slots", 16)),
+        demand_allocation_method=str(offerer.get("demand_allocation_method", "annealing")),
     )
 
     OffererService(cfg, deriv, selector).run_forever()

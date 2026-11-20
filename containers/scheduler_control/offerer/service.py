@@ -8,7 +8,9 @@ from pathlib import Path
 
 from libs.ipc.jsonio import atomic_write_json
 from libs.ipc.queue_scan import list_queued_domain_ids
+from libs.ipc.demand import read_demand
 from libs.stats.delta_writer import StatsDeltaWriter, now_iso
+from .allocation import allocate
 from .selection.base import SelectionStrategy
 
 
@@ -50,6 +52,17 @@ class OffererConfig:
     # peek_limit = min(slots_to_fill * peek_multiplier, peek_hard_cap).
     peek_multiplier: int = 3
     peek_hard_cap: int = 1000
+    demand_refill_enabled: bool = False
+    demand_url_budget: int = 10000
+    demand_per_domain_cap: int = 2000
+    demand_domain_slots: int = 16
+    demand_allocation_method: str = "annealing"
+
+    def __post_init__(self):
+        if min(self.demand_url_budget, self.demand_per_domain_cap, self.demand_domain_slots) <= 0:
+            raise ValueError("Demand budgets must be positive")
+        if self.demand_allocation_method not in ("greedy", "annealing", "mip"):
+            raise ValueError("Demand allocation method must be greedy, annealing or mip")
 
 
 class OffererService:
@@ -64,6 +77,7 @@ class OffererService:
         self.selector = selector
         self.stats = StatsDeltaWriter(stats_dir=cfg.stats_dir)
         self._next_shard_offset = 0
+        self._cycle_remaining = cfg.demand_url_budget
 
     def _rotated_shard_ids(self, offerer_id: int) -> tuple[list[int], int, int, int]:
         shard_start, shard_end = self.deriv.shard_range(offerer_id)
@@ -76,7 +90,7 @@ class OffererService:
         self._next_shard_offset = (offset + 1) % len(shard_ids)
         return ordered, shard_start, shard_end, offset
 
-    def _write_domain_file(self, queue_dir: str, domain_id: int, urls: list[str]) -> str:
+    def _write_domain_file(self, queue_dir: str, domain_id: int, urls: list[str], *, priority=None) -> str:
         """
         Writes one per-domain queue file:
           {"generated_at": "...", "domain_id": N, "urls": [...]}
@@ -91,13 +105,74 @@ class OffererService:
             "domain_id": domain_id,
             "urls": urls,
         }
+        if priority is not None:
+            payload["priority"] = priority
         atomic_write_json(final_path, payload)
         return final_path
 
     def _refill_once_if_needed(self) -> dict:
+        self._cycle_remaining = self.cfg.demand_url_budget
+        if self.cfg.demand_refill_enabled and hasattr(self.selector, "demand_candidates"):
+            self._refill_demand()
         if hasattr(self.selector, "peek_global_candidates"):
             return self._refill_global()
         return self._refill_per_shard()
+
+    def _refill_demand(self) -> None:
+        """Replenish known demand without an expensive full frontier peek.
+
+        Never replace a ready file. A consumer may have work in flight as well;
+        its demand already accounts for that inventory. Legacy refill still runs
+        afterwards to discover new domains and retain the exploration path.
+        """
+        queue_dir = self.deriv.queue_dir(self.cfg.offerer_id)
+        existing = list_queued_domain_ids(queue_dir)
+        capacity, demand = read_demand(queue_dir)
+        demand = {key: value for key, value in demand.items() if key not in existing}
+        slots = min(self.cfg.demand_domain_slots, self.cfg.max_domain_files - len(existing))
+        budget = min(capacity, self.cfg.demand_url_budget)
+        if not demand or slots <= 0 or budget <= 0:
+            return
+        try:
+            start, end = self.deriv.shard_range(self.cfg.offerer_id)
+            limits = {key: min(value, self.cfg.demand_per_domain_cap) for key, value in demand.items()}
+            candidates = self.selector.demand_candidates(limits, start, end)
+            demand = {c.domain_id: min(limits[c.domain_id], c.available_urls)
+                      if c.available_urls is not None else limits[c.domain_id] for c in candidates}
+            allocation_started = time.monotonic()
+            plan = allocate(candidates, demand, url_budget=budget, domain_slots=slots,
+                            per_domain_cap=self.cfg.demand_per_domain_cap,
+                            method=self.cfg.demand_allocation_method)
+            allocation_ms = (time.monotonic() - allocation_started) * 1000
+            baseline = (plan if self.cfg.demand_allocation_method == "greedy" else
+                        allocate(candidates, demand, url_budget=budget, domain_slots=slots,
+                                 per_domain_cap=self.cfg.demand_per_domain_cap, method="greedy"))
+            values = {c.domain_id: c.allocation_value for c in candidates}
+            chosen_value = sum(values[key] * amount for key, amount in plan.items())
+            greedy_value = sum(values[key] * amount for key, amount in baseline.items())
+            picked = 0
+            for candidate in sorted(candidates, key=lambda c: (-c.allocation_value, c.domain_id)):
+                count = plan.pop(candidate.domain_id, 0)
+                if not count:
+                    continue
+                urls = self.selector.claim_domain_urls(shard_id=candidate.shard_id,
+                                                       domain_id=candidate.domain_id,
+                                                       per_domain_cap=count)
+                if urls:
+                    self._write_domain_file(queue_dir, candidate.domain_id, urls, priority=candidate.allocation_value)
+                    picked += len(urls)
+                    self._cycle_remaining -= len(urls)
+                    self.stats.write(source="offerer", counters={"num_scheduled": len(urls)},
+                                     domains={candidate.domain_id: {"num_scheduled": len(urls)}})
+            logger.info("offer.demand", extra={"event": "offer.demand", "picked_urls": picked,
+                                               "url_budget": budget, "domain_slots": slots,
+                                               "allocation_method": self.cfg.demand_allocation_method,
+                                               "allocation_ms": round(allocation_ms, 3),
+                                               "allocation_value": chosen_value,
+                                               "greedy_value": greedy_value})
+        except Exception:
+            # A feedback/solver/query failure must not disable ordinary supply.
+            logger.exception("offer.demand_error", extra={"event": "offer.demand_error"})
 
     def _refill_per_shard(self) -> dict:
         offerer_id = self.cfg.offerer_id
@@ -269,7 +344,7 @@ class OffererService:
         existing_domain_ids = list_queued_domain_ids(queue_dir)
         cur_count = len(existing_domain_ids)
 
-        if cur_count >= self.cfg.low_watermark_domains:
+        if cur_count >= self.cfg.low_watermark_domains and not self.cfg.demand_refill_enabled:
             return {
                 "action": "noop",
                 "queue_dir": queue_dir,
@@ -287,7 +362,7 @@ class OffererService:
 
         shard_start, shard_end = self.deriv.shard_range(offerer_id)
         peek_limit = min(
-            slots_to_fill * self.cfg.peek_multiplier,
+            max(slots_to_fill * self.cfg.peek_multiplier, 200 if self.cfg.demand_refill_enabled else 0),
             self.cfg.peek_hard_cap,
         )
         peek_started = time.monotonic()
@@ -337,13 +412,22 @@ class OffererService:
         for cand in candidates:
             if len(new_domains) >= slots_to_fill:
                 break
+            per_domain_cap = self.cfg.per_domain_url_cap
+            if self.cfg.demand_refill_enabled:
+                capacity, _ = read_demand(queue_dir)
+                if self._cycle_remaining <= 0:
+                    break
+                # Fresh receiver headroom permits a larger bootstrap. Missing
+                # feedback retains the conservative initial offer size.
+                per_domain_cap = min(self._cycle_remaining,
+                                     self.cfg.demand_per_domain_cap if capacity > 0 else per_domain_cap)
             if cand.domain_id in new_domains:
                 continue
             try:
                 urls = self.selector.claim_domain_urls(
                     shard_id=cand.shard_id,
                     domain_id=cand.domain_id,
-                    per_domain_cap=self.cfg.per_domain_url_cap,
+                    per_domain_cap=per_domain_cap,
                 )
             except Exception as e:
                 logger.error(
@@ -366,13 +450,16 @@ class OffererService:
             new_domains[cand.domain_id] = urls
             # Each claim is committed by the selector. Publish it immediately
             # so the crawler can consume it while later domains are claimed.
-            self._write_domain_file(queue_dir, cand.domain_id, urls)
+            self._write_domain_file(queue_dir, cand.domain_id, urls,
+                                    priority=cand.allocation_value if self.cfg.demand_refill_enabled else None)
             if cand.shard_id not in shard_url_counter:
                 visited_shards.append(cand.shard_id)
             domain_counter[cand.domain_id] += len(urls)
             shard_domain_counter[cand.shard_id] += 1
             shard_url_counter[cand.shard_id] += len(urls)
             total_picked += len(urls)
+            if self.cfg.demand_refill_enabled:
+                self._cycle_remaining -= len(urls)
 
         logger.info(
             "offer.peek",
@@ -486,4 +573,9 @@ class OffererService:
                         "error_count": 1,
                     },
                 )
-            time.sleep(self.cfg.scan_interval_sec)
+            delay = self.cfg.scan_interval_sec
+            if self.cfg.demand_refill_enabled:
+                # Demand horizons assume a start-to-start cadence, rather than
+                # adding a full interval after a slow discovery/claim cycle.
+                delay = max(0.1, delay - (time.monotonic() - started))
+            time.sleep(delay)

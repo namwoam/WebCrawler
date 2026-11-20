@@ -55,6 +55,13 @@ class FairScheduler(BaseScheduler):
             logunser=normal.logunser, stats=crawler.stats,
             pqclass=normal.pqclass, crawler=crawler,
         )
+        if crawler.settings.getbool("IPC_DEMAND_ENABLED", False):
+            from .value_priority_queue import ManualValuePriorityQueue, ValuePriorityQueue
+            normal.pqclass = ValuePriorityQueue
+            manual.pqclass = ManualValuePriorityQueue
+            crawler._inventory_dispatch_policy = crawler.settings.get("MANUAL_BULK_CRAWL_SCHEDULING_POLICY", "weighted")
+            crawler._inventory_manual_share = (50 if crawler._inventory_dispatch_policy == "balanced" else
+                                              crawler.settings.get("MANUAL_BULK_CRAWL_SHARE_PERCENT", MANUAL_SHARE_PERCENT))
         restore = crawler.settings.getbool("SCHEDULER_RESTORE_POLICY_META", True)
         event = f"crawler.scheduler_restore_policy_meta_{'enabled' if restore else 'disabled'}"
         logger.info(event, extra={"event": event})

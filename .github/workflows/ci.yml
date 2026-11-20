@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [api, scheduler_ingest, crawler]
+        service: [api, scheduler_control, scheduler_ingest, crawler]
     defaults:
       run:
         working-directory: containers/${{ matrix.service }}
