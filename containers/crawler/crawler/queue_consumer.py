@@ -56,6 +56,16 @@ class QueueConsumer:
         self.queue_dir = Path(queue_dir)
         self.priorities = OrderedDict()
         self._priority_cache = {}
+        self.priority_blocked = False
+
+    def _remember_offer(self, entry, data):
+        value = data.get("priority", 0)
+        value = float(value) if isinstance(value, (int, float)) else 0
+        urls = data.get("urls")
+        self._priority_cache[entry.domain_id] = (
+            entry.mtime_ns, value if math.isfinite(value) else 0,
+            len(urls) if isinstance(urls, list) else 0,
+        )
 
     def pop_domain_batches(
         self,
@@ -72,6 +82,7 @@ class QueueConsumer:
         Returns {domain_id: [url, ...]}.
         Each consumed file is deleted immediately after reading.
         """
+        self.priority_blocked = False
         if not self.queue_dir.exists():
             return {}
 
@@ -86,18 +97,16 @@ class QueueConsumer:
         if not candidates:
             return {}
 
+        live_ids = {entry.domain_id for entry in candidates}
+        self._priority_cache = {key: value for key, value in self._priority_cache.items() if key in live_ids}
         if priority_only:
-            live_ids = {entry.domain_id for entry in candidates}
-            self._priority_cache = {key: value for key, value in self._priority_cache.items() if key in live_ids}
             ranked = []
             for entry in candidates:
                 cached = self._priority_cache.get(entry.domain_id)
                 if cached is None or cached[0] != entry.mtime_ns:
                     try:
-                        value = read_json(entry.path).get("priority", 0)
-                        value = float(value) if isinstance(value, (int, float)) else 0
-                        cached = (entry.mtime_ns, value if math.isfinite(value) else 0)
-                        self._priority_cache[entry.domain_id] = cached
+                        self._remember_offer(entry, read_json(entry.path))
+                        cached = self._priority_cache[entry.domain_id]
                     except (OSError, ValueError, TypeError, AttributeError):
                         continue
                 if cached[1] > 0:
@@ -124,13 +133,25 @@ class QueueConsumer:
             p = entry.path
             domain_id = entry.domain_id
 
+            cached = self._priority_cache.get(domain_id)
+            if (max_urls is not None and cached is not None
+                    and cached[0] == entry.mtime_ns and cached[2] > max_urls):
+                if priority_only:
+                    # Reserve headroom for the most valuable waiting offer.
+                    self.priority_blocked = True
+                    break
+                continue
             try:
                 data = read_json(p)
             except Exception:
                 continue
             urls = data.get("urls")
+            self._remember_offer(entry, data)
             if isinstance(urls, list) and max_urls is not None and len(urls) > max_urls:
                 # Leave the whole offer on disk until the consumer has capacity.
+                if priority_only:
+                    self.priority_blocked = True
+                    break
                 continue
             try:
                 p.unlink()
@@ -141,6 +162,7 @@ class QueueConsumer:
                 continue
 
             result[domain_id] = [str(u) for u in urls]
+            self._priority_cache.pop(domain_id, None)
             value = data.get("priority", 0)
             self.priorities.pop(domain_id, None)
             if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:

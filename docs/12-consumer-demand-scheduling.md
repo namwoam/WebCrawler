@@ -42,10 +42,15 @@ The crawler publishes every periodic top-up (normally five seconds). It can
 admit valuable ready offers, including newly observed domains, above the ordinary
 domain watermark. It may prefetch another batch for an active domain when that
 domain has at most 100 pending URLs. It
-caches file priorities by mtime without retaining decoded URL lists. Ready offers
+caches file priorities and URL counts by mtime without retaining decoded URL lists. Ready offers
 remain on disk until the complete file fits within its 32,000 pending-URL limit.
 This is a count bound, not an RSS limit. Existing container memory limits remain
 necessary. A queued offer and an active batch may coexist for a domain.
+If the highest-priority eligible offer cannot yet fit, admission reserves the
+remaining headroom rather than filling it with smaller, less valuable offers.
+In demand mode, completion-triggered refill runs when a domain drains; periodic
+refill handles prefetching. This avoids repeatedly scanning and decoding blocked
+offers on every response while the active domain count is below its watermark.
 
 ## Allocation
 

@@ -281,7 +281,7 @@ class HtmlSpider(scrapy.Spider):
         if slots <= 0 and not batch:
             return []
 
-        if slots > 0:
+        if slots > 0 and not (tracker is not None and self.queue.priority_blocked):
             batch.update(self.queue.pop_domain_batches(
                 limit=slots,
                 exclude_domain_ids=set(self._domain_pending) | set(batch),
@@ -332,7 +332,10 @@ class HtmlSpider(scrapy.Spider):
             if self._domain_pending[domain_id] <= 0:
                 del self._domain_pending[domain_id]
         self._set_inflight_stats()
-        if len(self._domain_pending) < self.domain_low_watermark:
+        # Demand mode has a periodic refill for prefetching. Do not rescan and
+        # decode ready offers on every completed response below the watermark.
+        needs_refill = self.demand_tracker is None or not self._domain_pending.get(domain_id)
+        if needs_refill and len(self._domain_pending) < self.domain_low_watermark:
             self._maybe_top_up(reason=f"{reason}_low_watermark")
 
     def spider_opened(self, spider=None):

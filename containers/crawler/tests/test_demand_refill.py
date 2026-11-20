@@ -8,6 +8,7 @@ from crawler.queue_consumer import QueueConsumer
 from crawler.spiders.spider import HtmlSpider
 from libs.ipc.demand import DemandTracker
 from libs.ipc.jsonio import atomic_write_json
+from unittest.mock import Mock
 
 
 def test_queue_leaves_offer_on_disk_when_capacity_is_insufficient(tmp_path):
@@ -111,3 +112,67 @@ def test_priority_admission_can_bootstrap_an_unseen_domain_above_watermark(tmp_p
     assert reserved[0][0] == 9
     assert len(reserved) == 160
     assert spider._pending_requests == 260
+
+
+def test_capacity_rechecks_do_not_decode_unchanged_offer(tmp_path, monkeypatch):
+    from crawler import queue_consumer
+    path = tmp_path / "domain_000009.json"
+    atomic_write_json(str(path), {"urls": ["https://example.test"] * 120, "priority": 1})
+    read = Mock(wraps=queue_consumer.read_json)
+    monkeypatch.setattr(queue_consumer, "read_json", read)
+    consumer = QueueConsumer(str(tmp_path))
+    for _ in range(20):
+        assert consumer.pop_domain_batches(max_urls=100, priority_only=True) == {}
+    assert read.call_count == 1
+    # Atomic replacement invalidates both the priority and count cache.
+    atomic_write_json(str(path), {"urls": ["https://example.test"] * 80, "priority": 2})
+    assert len(consumer.pop_domain_batches(max_urls=100, priority_only=True)[9]) == 80
+    assert consumer.priorities[9] == 2
+
+
+def test_blocked_valuable_offer_reserves_headroom_from_ordinary_refill(tmp_path):
+    spider = HtmlSpider()
+    spider.queue = QueueConsumer(str(tmp_path))
+    spider.domain_low_watermark = 10
+    spider._domain_pending = {1: 150}
+    spider._pending_requests = 150
+    spider.demand_tracker = DemandTracker()
+    spider.demand_max_pending = 250
+    spider._set_inflight_stats = lambda: None
+    spider._log = lambda message: None
+    high = tmp_path / "domain_000009.json"
+    low = tmp_path / "domain_000010.json"
+    atomic_write_json(str(high), {"urls": ["https://valuable.test"] * 120, "priority": 1.5})
+    atomic_write_json(str(low), {"urls": ["https://ordinary.test"] * 50, "priority": 0.2})
+    assert spider._reserve_urls("test") == []
+    assert high.exists() and low.exists()
+    spider._pending_requests = 130
+    assert len(spider._reserve_urls("test")) == 120
+    assert not high.exists() and low.exists()
+    assert spider._pending_requests == 250
+
+
+def test_demand_completions_refill_when_domain_drains_not_every_response():
+    spider = HtmlSpider()
+    spider.domain_low_watermark = 10
+    spider._domain_pending = {9: 3}
+    spider._pending_requests = 3
+    spider.demand_tracker = DemandTracker()
+    spider._set_inflight_stats = Mock()
+    spider._maybe_top_up = Mock()
+    spider._finish_owned_request("test", 9)
+    spider._finish_owned_request("test", 9)
+    spider._maybe_top_up.assert_not_called()
+    spider._finish_owned_request("test", 9)
+    spider._maybe_top_up.assert_called_once()
+
+
+def test_legacy_completion_refill_is_unchanged():
+    spider = HtmlSpider()
+    spider.domain_low_watermark = 10
+    spider._domain_pending = {9: 3}
+    spider._pending_requests = 3
+    spider._set_inflight_stats = Mock()
+    spider._maybe_top_up = Mock()
+    spider._finish_owned_request("test", 9)
+    spider._maybe_top_up.assert_called_once()
