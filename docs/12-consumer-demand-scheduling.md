@@ -10,7 +10,7 @@ Other domains' ready files can therefore keep that domain starved.
 The new path is opt-in. It keeps consumer internals behind an IPC boundary:
 the offerer reads neither crawler site policies nor QPS, concurrency, throttle,
 or hostname rules. Within-domain claim ordering, scoring, rate enforcement,
-manual-source scheduling, and the background ranker are retained. The opt-in
+manual-source selection policy, and the background ranker are retained. The opt-in
 normal dispatch queue now consumes offer priority. A claim also rechecks
 the domain's pause state before modifying URL rows.
 
@@ -40,7 +40,8 @@ site-specific rules. The snapshot also includes bounded `inventory` and
 
 The crawler publishes every periodic top-up (normally five seconds). It can
 admit valuable ready offers, including newly observed domains, above the ordinary
-domain watermark, but never takes another live batch for the same domain. It
+domain watermark. It may prefetch another batch for an active domain when that
+domain has at most 100 pending URLs. It
 caches file priorities by mtime without retaining decoded URL lists. Ready offers
 remain on disk until the complete file fits within its 32,000 pending-URL limit.
 This is a count bound, not an RSS limit. Existing container memory limits remain
@@ -108,8 +109,16 @@ available capacity first; domains at their concurrency cap stay queued while
 other domains use spare capacity. Local occupancy includes requests waiting in
 middleware and manual-source requests. Requests sharing a policy slot share its
 admission count. Existing downloader delays and shared cross-process concurrency
-leases still enforce their configured limits. Manual source selection retains
-its existing policy and queue implementation.
+leases still enforce their configured limits. With weighted source selection,
+the normal and manual queues share policy-slot admission: when both have work,
+the manual allocation uses the configured share (at least one slot), and normal
+work uses the remainder. Either source can borrow spare slots when the other
+has no work. Balanced selection uses equal shares; the explicit source-first
+policies retain their precedence.
+
+This branch builds on `namwoam:perf/link-processing` (PR #142), using its bounded
+HTML parser process pool and shutdown handling. It does not add a second parser
+pool implementation or change crawler site-policy limits.
 
 The canary logs headers-to-body time, response size, normal parse duration, and
 slot delay/occupancy to distinguish supply starvation from downloader/CPU limits.
