@@ -12,16 +12,16 @@ import time
 from types import SimpleNamespace
 
 
-def slow_append(path, record):
-    from libs.ipc.jsonio import append_jsonl
-    assert os.getpid() != record.pop("_test_parent_pid")
+def slow_batch(payloads, parent_pid):
+    from crawler.json_writer import append_records
+    assert os.getpid() != parent_pid
     time.sleep(0.01)
-    append_jsonl(path, record)
+    return append_records(payloads)
 
 
 async def run(root):
     from scrapy.utils.defer import maybe_deferred_to_future
-    from crawler import pipelines
+    from crawler import pipelines, json_writer
 
     class FrozenDatetime:
         @staticmethod
@@ -47,20 +47,20 @@ async def run(root):
 
     # The child task itself is top-level/picklable, with a slow append allowing
     # the reactor responsiveness assertion to be independent of machine speed.
-    original_submit = pipelines.ProcessPoolExecutor
+    original_submit = json_writer.ProcessPoolExecutor
 
     def create_executor(**kwargs):
         executor = original_submit(**kwargs)
         submit = executor.submit
 
-        def wrapped(fn, path, record):
-            assert fn is pipelines.append_jsonl
-            return submit(slow_append, path, dict(record, _test_parent_pid=os.getpid()))
+        def wrapped(fn, payloads):
+            assert fn is json_writer.append_records
+            return submit(slow_batch, payloads, os.getpid())
 
         executor.submit = wrapped
         return executor
 
-    pipelines.ProcessPoolExecutor = create_executor
+    json_writer.ProcessPoolExecutor = create_executor
     writer = pipelines.JsonPipeline(str(root / "process"), 10, writer_processes=1)
     writer.open_spider(spider)
     running = True
@@ -75,7 +75,7 @@ async def run(root):
     ticker = asyncio.create_task(tick())
     try:
         writes = [writer.process_item(item, spider) for item in items]
-        assert writer._slots.limit - writer._slots.tokens == 2
+        assert writer._pool._inflight <= 2
         closed = writer.close_spider(spider)
         results = await asyncio.gather(*(maybe_deferred_to_future(d) for d in writes))
         assert results == items
@@ -96,7 +96,7 @@ async def run(root):
                                     on_broken=lambda: broken.append(True))
     faulty.open_spider(spider)
     await maybe_deferred_to_future(faulty.process_item(items[0], spider))
-    pid = next(iter(faulty._pool._processes))
+    pid = next(iter(faulty._pool._executor._processes))
     os.kill(pid, signal.SIGKILL)
     try:
         await maybe_deferred_to_future(faulty.process_item(items[1], spider))

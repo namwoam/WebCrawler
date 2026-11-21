@@ -144,17 +144,27 @@ pool implementation or change crawler site-policy limits.
 
 `JSON_WRITER_PROCESSES` (environment `CRAWLER_JSON_WRITER_PROCESSES`) accepts
 zero for inline output or one for a spawned output process. One worker preserves
-JSONL append order, with at most two submitted records. Each item remains
-unacknowledged until its write finishes; Scrapy retains backpressure for waiting
-items. Cancellation does not release a running write's permit. Graceful shutdown
-drains accepted writes before joining the process. A broken writer pool stops
-refilling and closes the crawler for Supervisor to restart, as for parser death.
-Both types of worker use the same Linux parent-death cleanup helper. JSONL fields,
-bytes, record order, and the bucket timestamp chosen on pipeline entry remain
-unchanged. The setting defaults to zero. Record pickling still takes work in the
-parent, so the process boundary must be measured rather than assumed faster.
-The independent response buffer is configured with
-`CRAWLER_SCRAPER_SLOT_MAX_ACTIVE_SIZE` in bytes.
+JSONL append order. The writer batches up to 8 records, 4 MiB of encoded record
+payloads, or 50 ms from the first buffered record. Limits are configured with
+`JSON_WRITER_BATCH_SIZE`, `JSON_WRITER_BATCH_BYTES`, and
+`JSON_WRITER_FLUSH_INTERVAL_MS` (environment names add `CRAWLER_`).
+
+There are at most two submitted batches. Waiting items retain their original
+records under Scrapy backpressure; they are not all serialized into an executor
+queue. The builder encodes each admitted record once and caches at most one
+lookahead record when a byte boundary is reached. A record larger than the byte
+cap runs alone, after other batches drain, rather than being dropped or combined
+with another large record. The existing response-size policy still applies.
+
+Each item remains unacknowledged until its own write succeeds or fails. A partial
+batch failure reports errors only for failed records and preserves successful
+records. Cancellation does not release a running write's capacity. Graceful
+shutdown flushes partial batches and drains accepted writes before joining the
+process. A broken writer stops refilling and closes the crawler for Supervisor
+restart. Parser and writer use the same Linux parent-death cleanup helper.
+JSONL fields, bytes, order, and bucket timestamps chosen on pipeline entry stay
+unchanged. The setting defaults to zero. The independent response buffer is
+configured with `CRAWLER_SCRAPER_SLOT_MAX_ACTIVE_SIZE` in bytes.
 
 The canary logs headers-to-body time, response size, normal parse duration, and
 slot delay/occupancy to distinguish supply starvation from downloader/CPU limits.
