@@ -44,8 +44,7 @@ async def run():
 
         async def start(self):
             for i in range(12):
-                yield Request(f"{url}/slow/{i}", priority=100,
-                              meta={"download_slot": "slow"})
+                yield Request(f"{url}/slow/{i}", meta={"download_slot": "slow"})
             for i in range(20):
                 yield Request(f"{url}/fast/{i}", meta={"download_slot": "fast"})
 
@@ -54,7 +53,7 @@ async def run():
 
     runner = CrawlerRunner({
         "LOG_ENABLED": False, "CONCURRENT_REQUESTS": 4,
-        "SCHEDULER_PRIORITY_QUEUE": "crawler.value_priority_queue.ValuePriorityQueue",
+        "SCHEDULER_PRIORITY_QUEUE": "crawler.slot_admission_queue.SlotAdmissionQueue",
         "SCHEDULER_MEMORY_QUEUE": "scrapy.squeues.FifoMemoryQueue",
         "SCHEDULER_START_MEMORY_QUEUE": None,
         "SCHEDULER_START_DISK_QUEUE": None,
@@ -85,7 +84,7 @@ async def run():
     slow = [t for path, t in received if path.startswith("/slow/")]
     fast = [t for path, t in received if path.startswith("/fast/")]
     assert len(slow) == 12 and len(fast) == 20, received
-    assert min(fast) < slow[4], "Delayed high-priority backlog blocked fast work"
+    assert min(fast) < slow[4], "Delayed backlog blocked fast work"
     assert peak >= 2, "Admission serialized independent HTTP transfers"
     assert max_queued <= 1, max_queued
     # Server arrival timestamps can bunch up when this shared reactor is busy;

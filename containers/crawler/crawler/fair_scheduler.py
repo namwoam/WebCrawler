@@ -56,9 +56,9 @@ class FairScheduler(BaseScheduler):
             pqclass=normal.pqclass, crawler=crawler,
         )
         if crawler.settings.getbool("IPC_DEMAND_ENABLED", False):
-            from .value_priority_queue import ManualValuePriorityQueue, ValuePriorityQueue
-            normal.pqclass = ValuePriorityQueue
-            manual.pqclass = ManualValuePriorityQueue
+            from .slot_admission_queue import ManualSlotAdmissionQueue, SlotAdmissionQueue
+            normal.pqclass = SlotAdmissionQueue
+            manual.pqclass = ManualSlotAdmissionQueue
             crawler._inventory_dispatch_policy = crawler.settings.get("MANUAL_BULK_CRAWL_SCHEDULING_POLICY", "weighted")
             crawler._inventory_manual_share = (50 if crawler._inventory_dispatch_policy == "balanced" else
                                               crawler.settings.get("MANUAL_BULK_CRAWL_SHARE_PERCENT", MANUAL_SHARE_PERCENT))

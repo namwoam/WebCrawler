@@ -84,19 +84,35 @@ def test_periodic_refill_failure_does_not_stop_future_ticks():
     assert len(calls) == 2
 
 
-def test_priority_crosses_queue_boundary_and_is_applied_to_normal_requests(tmp_path):
+def test_legacy_offer_score_and_priority_are_ignored_by_crawler(tmp_path):
     spider = HtmlSpider()
     spider.queue = QueueConsumer(str(tmp_path))
     spider.demand_tracker = DemandTracker()
     path = tmp_path / "domain_000009.json"
-    atomic_write_json(str(path), {"urls": ["https://example.test"], "priority": 1.25})
+    atomic_write_json(str(path), {"urls": ["https://example.test"], "priority": 1.25, "score": 999})
     spider.queue.pop_domain_batches()
     request = spider._build_request("https://example.test", 9)
-    assert request.priority == 1250000
+    assert request.priority == 0
+    assert "score" not in request.meta
+    assert "priority" not in request.meta
     assert request.meta["_track_domain_id"] == 9
 
 
-def test_priority_admission_can_bootstrap_an_unseen_domain_above_watermark(tmp_path):
+def test_offer_publication_order_wins_over_legacy_scores_and_domain_ids(tmp_path):
+    import os
+    first = tmp_path / "domain_000010.json"
+    later = tmp_path / "domain_000009.json"
+    atomic_write_json(str(first), {"urls": ["https://first.test/b", "https://first.test/a"], "priority": 0.1})
+    atomic_write_json(str(later), {"urls": ["https://later.test"], "priority": 100})
+    os.utime(first, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(later, ns=(2_000_000_000, 2_000_000_000))
+    consumer = QueueConsumer(str(tmp_path))
+    batch = consumer.pop_domain_batches(max_urls=3, preserve_order=True)
+    assert list(batch) == [10, 9]
+    assert batch[10] == ["https://first.test/b", "https://first.test/a"]
+
+
+def test_fifo_admission_can_bootstrap_an_unseen_domain_above_watermark(tmp_path):
     spider = HtmlSpider()
     spider.queue = QueueConsumer(str(tmp_path))
     spider.domain_low_watermark = 1
@@ -106,8 +122,8 @@ def test_priority_admission_can_bootstrap_an_unseen_domain_above_watermark(tmp_p
     spider.demand_max_pending = 500
     spider._set_inflight_stats = lambda: None
     spider._log = lambda message: None
-    atomic_write_json(str(tmp_path / "domain_000009.json"), {"urls": ["https://valuable.test"] * 80, "priority": 1.5})
-    atomic_write_json(str(tmp_path / "domain_000010.json"), {"urls": ["https://ordinary.test"] * 80, "priority": 0.2})
+    atomic_write_json(str(tmp_path / "domain_000009.json"), {"urls": ["https://valuable.test"] * 80, "priority": 0.1})
+    atomic_write_json(str(tmp_path / "domain_000010.json"), {"urls": ["https://ordinary.test"] * 80, "priority": 99})
     reserved = spider._reserve_urls("test")
     assert reserved[0][0] == 9
     assert len(reserved) == 160
@@ -122,15 +138,15 @@ def test_capacity_rechecks_do_not_decode_unchanged_offer(tmp_path, monkeypatch):
     monkeypatch.setattr(queue_consumer, "read_json", read)
     consumer = QueueConsumer(str(tmp_path))
     for _ in range(20):
-        assert consumer.pop_domain_batches(max_urls=100, priority_only=True) == {}
+        assert consumer.pop_domain_batches(max_urls=100, preserve_order=True) == {}
     assert read.call_count == 1
-    # Atomic replacement invalidates both the priority and count cache.
+    # Atomic replacement invalidates the count cache.
     atomic_write_json(str(path), {"urls": ["https://example.test"] * 80, "priority": 2})
-    assert len(consumer.pop_domain_batches(max_urls=100, priority_only=True)[9]) == 80
-    assert consumer.priorities[9] == 2
+    assert len(consumer.pop_domain_batches(max_urls=100, preserve_order=True)[9]) == 80
+    assert not hasattr(consumer, "priorities")
 
 
-def test_blocked_valuable_offer_reserves_headroom_from_ordinary_refill(tmp_path):
+def test_first_published_offer_reserves_headroom_from_later_refill(tmp_path):
     spider = HtmlSpider()
     spider.queue = QueueConsumer(str(tmp_path))
     spider.domain_low_watermark = 10
@@ -142,8 +158,8 @@ def test_blocked_valuable_offer_reserves_headroom_from_ordinary_refill(tmp_path)
     spider._log = lambda message: None
     high = tmp_path / "domain_000009.json"
     low = tmp_path / "domain_000010.json"
-    atomic_write_json(str(high), {"urls": ["https://valuable.test"] * 120, "priority": 1.5})
-    atomic_write_json(str(low), {"urls": ["https://ordinary.test"] * 50, "priority": 0.2})
+    atomic_write_json(str(high), {"urls": ["https://valuable.test"] * 120, "priority": 0.1})
+    atomic_write_json(str(low), {"urls": ["https://ordinary.test"] * 50, "priority": 99})
     assert spider._reserve_urls("test") == []
     assert high.exists() and low.exists()
     spider._pending_requests = 130

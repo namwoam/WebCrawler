@@ -90,7 +90,7 @@ class OffererService:
         self._next_shard_offset = (offset + 1) % len(shard_ids)
         return ordered, shard_start, shard_end, offset
 
-    def _write_domain_file(self, queue_dir: str, domain_id: int, urls: list[str], *, priority=None) -> str:
+    def _write_domain_file(self, queue_dir: str, domain_id: int, urls: list[str]) -> str:
         """
         Writes one per-domain queue file:
           {"generated_at": "...", "domain_id": N, "urls": [...]}
@@ -105,8 +105,6 @@ class OffererService:
             "domain_id": domain_id,
             "urls": urls,
         }
-        if priority is not None:
-            payload["priority"] = priority
         atomic_write_json(final_path, payload)
         return final_path
 
@@ -159,7 +157,7 @@ class OffererService:
                                                        domain_id=candidate.domain_id,
                                                        per_domain_cap=count)
                 if urls:
-                    self._write_domain_file(queue_dir, candidate.domain_id, urls, priority=candidate.allocation_value)
+                    self._write_domain_file(queue_dir, candidate.domain_id, urls)
                     picked += len(urls)
                     self._cycle_remaining -= len(urls)
                     self.stats.write(source="offerer", counters={"num_scheduled": len(urls)},
@@ -450,8 +448,7 @@ class OffererService:
             new_domains[cand.domain_id] = urls
             # Each claim is committed by the selector. Publish it immediately
             # so the crawler can consume it while later domains are claimed.
-            self._write_domain_file(queue_dir, cand.domain_id, urls,
-                                    priority=cand.allocation_value if self.cfg.demand_refill_enabled else None)
+            self._write_domain_file(queue_dir, cand.domain_id, urls)
             if cand.shard_id not in shard_url_counter:
                 visited_shards.append(cand.shard_id)
             domain_counter[cand.domain_id] += len(urls)

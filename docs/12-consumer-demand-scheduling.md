@@ -10,9 +10,10 @@ Other domains' ready files can therefore keep that domain starved.
 The new path is opt-in. It keeps consumer internals behind an IPC boundary:
 the offerer reads neither crawler site policies nor QPS, concurrency, throttle,
 or hostname rules. Within-domain claim ordering, scoring, rate enforcement,
-manual-source selection policy, and the background ranker are retained. The opt-in
-normal dispatch queue now consumes offer priority. A claim also rechecks
-the domain's pause state before modifying URL rows.
+manual-source selection policy, and the background ranker are retained. URL value
+and offer selection belong to the offerer. The crawler receives no URL scores
+and makes no value-based scheduling decisions. A claim also rechecks the
+domain's pause state before modifying URL rows.
 
 ## Demand contract
 
@@ -34,20 +35,21 @@ domain has a batch. Idle time after draining is excluded so supply starvation
 does not reduce future demand. Its target is 180 seconds of observed work, with
 a 100-URL bootstrap floor and 2,000-URL maximum. State is bounded to 2,000 domains
 and inactive entries expire after ten minutes. Restarting loses these estimates;
-priority-aware bootstrap offers initialize them again. This adapter has no
+bootstrap offers initialize them again. This adapter has no
 site-specific rules. The snapshot also includes bounded `inventory` and
 `targets` maps for diagnostics; the offerer does not interpret crawler internals.
 
 The crawler publishes every periodic top-up (normally five seconds). It can
-admit valuable ready offers, including newly observed domains, above the ordinary
+admit ready offers in publication order, including newly observed domains, above the ordinary
 domain watermark. It may prefetch another batch for an active domain when that
 domain has at most 100 pending URLs. It
-caches file priorities and URL counts by mtime without retaining decoded URL lists. Ready offers
+caches URL counts by mtime without retaining decoded URL lists. Ready offers
 remain on disk until the complete file fits within its 32,000 pending-URL limit.
 This is a count bound, not an RSS limit. Existing container memory limits remain
 necessary. A queued offer and an active batch may coexist for a domain.
-If the highest-priority eligible offer cannot yet fit, admission reserves the
-remaining headroom rather than filling it with smaller, less valuable offers.
+If the first eligible published offer cannot yet fit, admission reserves the
+remaining headroom rather than filling it with smaller, later offers. Legacy
+priority fields are ignored; the consumer does not rank or score ready files.
 In demand mode, completion-triggered refill runs when a domain drains; periodic
 refill handles prefetching. This avoids repeatedly scanning and decoding blocked
 offers on every response while the active domain count is below its watermark.
@@ -108,12 +110,18 @@ the next demand cycle beyond the inventory horizon.
 
 ## Crawler dispatch
 
-Offer payloads carry a numeric `priority`. The crawler maps it to normal request
-priority and uses a policy-slot-aware priority queue. Valuable ready work gets
-available capacity first; domains at their concurrency cap stay queued while
-other domains use spare capacity. Local occupancy includes requests waiting in
-middleware and manual-source requests. Requests sharing a policy slot share its
-admission count. Existing downloader delays and shared cross-process concurrency
+The offerer chooses domains and URLs by value, claims URLs in score order, and
+publishes selected demand offers in descending effective value. Payloads contain
+only the publication timestamp, domain ID, and ordered URL list. The consumer
+reads files oldest-publication-first and retains each list's URL order. It does
+not turn URL values into Scrapy request priorities or rerank files by value.
+
+A policy-slot admission queue handles availability: domains at their concurrency
+cap or with a waiting download stay queued while other domains use spare
+capacity. Among admissible slots it retains Scrapy's least-active-slot selection;
+this is an execution-capacity decision, not business ranking. Local occupancy
+includes middleware and manual-source requests. Requests sharing a policy slot
+share admission capacity. Existing downloader delays and cross-process concurrency
 leases still enforce their configured limits. With weighted source selection,
 the normal and manual queues share policy-slot admission: when both have work,
 the manual allocation uses the configured share (at least one slot), and normal
@@ -124,9 +132,9 @@ policies retain their precedence.
 Admission allows at most one waiting request per policy slot in addition to
 actual transfers, counting both downloader queues and middleware waiters across
 sources. Further backlog stays in the scheduler, allowing other domains to use
-global downloader capacity while a valuable site's delay is running. Selection
-still prefers the highest-value admissible request. A single crawler-wide 50 ms
-wakeup allows admission to resume when a waiting request starts transferring;
+global downloader capacity while a site's delay is running. The crawler does
+not compare URL or domain scores when selecting an admissible slot. A single
+crawler-wide 50 ms wakeup allows admission to resume when a waiting request starts transferring;
 otherwise Scrapy may wait until a response completes or its five-second engine
 heartbeat. This timer does not initiate transfers or bypass downloader delays.
 

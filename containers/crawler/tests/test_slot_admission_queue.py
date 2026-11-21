@@ -7,11 +7,11 @@ from scrapy.settings import Settings
 from scrapy.squeues import FifoMemoryQueue
 
 from containers.crawler.crawler.site_policies import SitePolicies
-from containers.crawler.crawler.value_priority_queue import ValuePriorityQueue
+from containers.crawler.crawler.slot_admission_queue import SlotAdmissionQueue
 
 
 @pytest.fixture
-def value_queue(monkeypatch):
+def admission_queue(monkeypatch):
     policies = SitePolicies({"domains": {"example.com": {"request_limits": {
         "download_slot": "valuable", "max_concurrent_requests": 2}}}})
     monkeypatch.setattr(SitePolicies, "load", lambda: policies)
@@ -19,29 +19,30 @@ def value_queue(monkeypatch):
     downloader.slots["valuable"] = SimpleNamespace(
         active=set(), transferring=downloader.active, queue=[], concurrency=2)
     crawler = SimpleNamespace(settings=Settings(), engine=SimpleNamespace(downloader=downloader))
-    queue = ValuePriorityQueue(crawler, FifoMemoryQueue, "")
+    queue = SlotAdmissionQueue(crawler, FifoMemoryQueue, "")
     yield queue, downloader
     queue.close()
 
 
-def test_high_value_dispatches_first_but_yields_when_policy_capacity_is_full(value_queue):
-    queue, downloader = value_queue
-    low = Request("https://other.example.net/a", priority=100)
-    high = [Request(f"https://en.example.com/{i}", priority=1000) for i in range(3)]
-    for req in [low, *high]:
+def test_slot_selection_ignores_url_value_and_yields_at_policy_capacity(admission_queue):
+    queue, downloader = admission_queue
+    other = Request("https://other.example.net/a", priority=1)
+    shared = [Request(f"https://en.example.com/{i}", priority=1000) for i in range(3)]
+    for req in [other, *shared]:
         queue.push(req)
-    for req in high[:2]:
+    # Site availability selects the same least-active slot irrespective of scores.
+    assert queue.pop() is other
+    for req in shared[:2]:
         assert queue.pop() is req
         downloader.active.add(req)
-    assert queue.pop() is low
-    assert queue.pop() is None  # saturated requests remain queued
+    assert queue.pop() is None
     assert len(queue) == 1
-    downloader.active.remove(high[0])
-    assert queue.pop() is high[2]
+    downloader.active.remove(shared[0])
+    assert queue.pop() is shared[2]
 
 
-def test_shared_slot_counts_other_source_and_other_language_hosts(value_queue):
-    queue, downloader = value_queue
+def test_shared_slot_counts_other_source_and_other_language_hosts(admission_queue):
+    queue, downloader = admission_queue
     manual = Request("https://zh.example.com/manual", meta={"manual_bulk_crawl_job_id": "job"})
     downloader.active.add(manual)
     first = Request("https://en.example.com/first", priority=1000)
@@ -57,8 +58,8 @@ def test_shared_slot_counts_other_source_and_other_language_hosts(value_queue):
     assert queue.pop() is second
 
 
-def test_equal_values_keep_work_conserving_round_robin(value_queue):
-    queue, downloader = value_queue
+def test_admissible_slots_keep_work_conserving_round_robin(admission_queue):
+    queue, downloader = admission_queue
     a = Request("https://a.example.net/a")
     b = Request("https://b.example.net/b")
     queue.push(b)
@@ -67,16 +68,16 @@ def test_equal_values_keep_work_conserving_round_robin(value_queue):
     assert queue.pop() is b
 
 
-def test_redirect_re_resolves_policy_instead_of_inheriting_cached_slot(value_queue):
-    queue, downloader = value_queue
+def test_redirect_re_resolves_policy_instead_of_inheriting_cached_slot(admission_queue):
+    queue, downloader = admission_queue
     request = Request("https://en.example.com/a")
     assert queue._policy(request)[1:] == ("valuable", 2)
     redirected = request.replace(url="https://other.example.net/b")
     assert queue._policy(redirected)[1:] == ("other.example.net", 16)
 
 
-def test_invalid_hostname_does_not_abort_enqueue_or_future_work(value_queue):
-    queue, downloader = value_queue
+def test_invalid_hostname_does_not_abort_enqueue_or_future_work(admission_queue):
+    queue, downloader = admission_queue
     bad = Request("https://computer_name.company.com/example")
     good = Request("https://valid.example.net/example")
     queue.push(bad)
@@ -87,10 +88,10 @@ def test_invalid_hostname_does_not_abort_enqueue_or_future_work(value_queue):
         queue.policies.resolve("computer_name.company.com")
 
 
-def test_sources_share_slot_capacity_and_borrow_when_other_source_is_empty(value_queue):
-    from containers.crawler.crawler.value_priority_queue import ManualValuePriorityQueue
-    normal, downloader = value_queue
-    manual = ManualValuePriorityQueue(normal.crawler, FifoMemoryQueue, "")
+def test_sources_share_slot_capacity_and_borrow_when_other_source_is_empty(admission_queue):
+    from containers.crawler.crawler.slot_admission_queue import ManualSlotAdmissionQueue
+    normal, downloader = admission_queue
+    manual = ManualSlotAdmissionQueue(normal.crawler, FifoMemoryQueue, "")
     try:
         normals = [Request(f"https://en.example.com/n{i}", priority=1000) for i in range(3)]
         manuals = [Request(f"https://zh.example.com/m{i}", meta={"manual_bulk_crawl_job_id": "job"}) for i in range(2)]
@@ -113,7 +114,7 @@ def test_sources_share_slot_capacity_and_borrow_when_other_source_is_empty(value
 
 
 def test_seven_request_slot_reserves_six_normal_and_one_manual(monkeypatch):
-    from containers.crawler.crawler.value_priority_queue import ManualValuePriorityQueue
+    from containers.crawler.crawler.slot_admission_queue import ManualSlotAdmissionQueue
     policies = SitePolicies({"domains": {"example.com": {"request_limits": {
         "download_slot": "valuable", "max_concurrent_requests": 7}}}})
     monkeypatch.setattr(SitePolicies, "load", lambda: policies)
@@ -121,8 +122,8 @@ def test_seven_request_slot_reserves_six_normal_and_one_manual(monkeypatch):
     downloader.slots["valuable"] = SimpleNamespace(
         active=set(), transferring=downloader.active, queue=[], concurrency=7)
     crawler = SimpleNamespace(settings=Settings(), engine=SimpleNamespace(downloader=downloader))
-    normal = ValuePriorityQueue(crawler, FifoMemoryQueue, "")
-    manual = ManualValuePriorityQueue(crawler, FifoMemoryQueue, "")
+    normal = SlotAdmissionQueue(crawler, FifoMemoryQueue, "")
+    manual = ManualSlotAdmissionQueue(crawler, FifoMemoryQueue, "")
     try:
         for i in range(10):
             normal.push(Request(f"https://en.example.com/n{i}", priority=1000))
@@ -137,8 +138,8 @@ def test_seven_request_slot_reserves_six_normal_and_one_manual(monkeypatch):
         manual.close()
 
 
-def test_delayed_high_priority_slot_leaves_downloader_room_for_other_domains(value_queue):
-    queue, downloader = value_queue
+def test_delayed_slot_leaves_downloader_room_for_other_domains(admission_queue):
+    queue, downloader = admission_queue
     waiting = Request("https://en.example.com/waiting")
     downloader.active.add(waiting)
     slot = downloader.slots["valuable"]
@@ -150,14 +151,14 @@ def test_delayed_high_priority_slot_leaves_downloader_room_for_other_domains(val
     queue.push(low)
     assert queue.pop() is low
     assert queue.pop() is None
-    # Once the existing waiter transfers, highest-value admission resumes.
+    # Once the existing waiter transfers, slot admission resumes.
     slot.queue.clear()
     slot.transferring.add(waiting)
     assert queue.pop() is high
 
 
-def test_middleware_waiter_counts_before_downloader_slot_exists(value_queue):
-    queue, downloader = value_queue
+def test_middleware_waiter_counts_before_downloader_slot_exists(admission_queue):
+    queue, downloader = admission_queue
     first = Request("https://new.example.net/first")
     second = Request("https://new.example.net/second")
     queue.push(first)
@@ -170,8 +171,8 @@ def test_middleware_waiter_counts_before_downloader_slot_exists(value_queue):
     assert queue.pop() is second
 
 
-def test_admission_uses_live_downloader_concurrency_when_lower_than_policy(value_queue):
-    queue, downloader = value_queue
+def test_admission_uses_live_downloader_concurrency_when_lower_than_policy(admission_queue):
+    queue, downloader = admission_queue
     slot = downloader.slots["valuable"]
     slot.concurrency = 1
     first = Request("https://en.example.com/first")
@@ -183,11 +184,11 @@ def test_admission_uses_live_downloader_concurrency_when_lower_than_policy(value
     assert queue.pop() is None
 
 
-def test_waiters_share_one_wakeup_and_stop_waking_after_engine_closes(value_queue, monkeypatch):
+def test_waiters_share_one_wakeup_and_stop_waking_after_engine_closes(admission_queue, monkeypatch):
     from unittest.mock import Mock
     from twisted.internet import reactor
     from twisted.internet.task import Clock
-    queue, downloader = value_queue
+    queue, downloader = admission_queue
     clock = Clock()
     monkeypatch.setattr(reactor, "callLater", clock.callLater)
     engine = queue.crawler.engine
@@ -205,14 +206,14 @@ def test_waiters_share_one_wakeup_and_stop_waking_after_engine_closes(value_queu
     schedule.assert_called_once()
 
 
-def test_live_delayed_priority_work_leaves_capacity_for_other_domains():
+def test_live_delayed_work_leaves_capacity_for_other_domains():
     import os
     from pathlib import Path
     import subprocess
     import sys
     root = Path(__file__).resolve().parents[3]
     result = subprocess.run(
-        [sys.executable, str(Path(__file__).parent / "helpers/value_admission_runner.py")],
+        [sys.executable, str(Path(__file__).parent / "helpers/slot_admission_runner.py")],
         cwd=root / "containers/crawler",
         env={**os.environ, "PYTHONPATH": f"{root}:{root / 'containers/crawler'}"},
         capture_output=True, text=True, timeout=30,

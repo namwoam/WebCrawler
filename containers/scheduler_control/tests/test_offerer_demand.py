@@ -179,6 +179,29 @@ def test_demand_and_bootstrap_share_the_cycle_url_budget():
         assert [call["per_domain_cap"] for call in selector.claim_calls] == [700, 300]
 
 
+def test_offerer_publishes_value_order_without_sending_scores_to_crawler():
+    selector = _StubGlobalStrategy(per_domain_urls={
+        1: ["https://first.test/a", "https://first.test/b"],
+        2: ["https://second.test/a", "https://second.test/b"],
+    })
+    selector.demand_candidates = lambda ids, start, end: [
+        CandidateDomain(1, 0, 0.9, 2, 0.2), CandidateDomain(2, 0, 0.1, 2, 1.1)]
+    with tempfile.TemporaryDirectory() as tmp:
+        svc = _make_service(tmp, selector, demand_refill_enabled=True)
+        queue = Path(tmp) / "queue_00"
+        tracker = DemandTracker()
+        tracker.admitted(1)
+        tracker.admitted(2)
+        tracker.publish(str(queue), {}, 100)
+        with patch.object(svc, "_write_domain_file", wraps=svc._write_domain_file) as publish:
+            svc._refill_once_if_needed()
+        assert [call.args[1] for call in publish.call_args_list] == [2, 1]
+        for domain_id, urls in selector.per_domain_urls.items():
+            payload = json.loads((queue / f"domain_{domain_id:06d}.json").read_text())
+            assert set(payload) == {"generated_at", "domain_id", "urls"}
+            assert payload["urls"] == urls
+
+
 def test_demand_failure_does_not_block_normal_refill():
     selector = _StubGlobalStrategy(candidates=[CandidateDomain(1, 0, 10)],
                                    per_domain_urls={1: ["https://example.test"]})

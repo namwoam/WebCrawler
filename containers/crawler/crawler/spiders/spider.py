@@ -213,8 +213,6 @@ class HtmlSpider(scrapy.Spider):
             callback=self.parse,
             errback=self.errback,
             meta={"source_url": url, "_track_domain_id": domain_id},
-            priority=(int(self.queue.priorities.get(domain_id, 0) * 1000000)
-                      if self.demand_tracker is not None else 0),
         )
 
     def _response_metadata(self, response) -> dict:
@@ -260,28 +258,28 @@ class HtmlSpider(scrapy.Spider):
         capacity = None
         if tracker is not None:
             capacity = max(0, self.demand_max_pending - pending_before)
-            # Admit requested replenishments even if unrelated slow domains keep
-            # the domain-count watermark high. One live batch per domain remains.
+            # Consume offers in publication order above the domain watermark,
+            # bounded by remaining consumer inventory capacity.
             if capacity:
                 batch = self.queue.pop_domain_batches(
                     # A small tail remains queued while the next offer is loaded,
                     # avoiding an idle interval when the previous batch drains.
                     limit=16, exclude_domain_ids={key for key, count in self._domain_pending.items() if count > 100},
-                    priority_only=True, max_urls=capacity,
+                    preserve_order=True, max_urls=capacity,
                 )
                 capacity -= sum(len(urls) for urls in batch.values())
         slots = self.domain_low_watermark - len(self._domain_pending)
         slots = max(0, slots - len(batch))
         if tracker is not None and capacity and not batch:
             # URL inventory is the backpressure bound. A domain-count watermark
-            # must not indefinitely exclude newly discovered valuable work.
+            # must not indefinitely exclude newly offered work.
             slots = max(1, slots)
         if slots <= 0:
             slots = 1 if force else 0
         if slots <= 0 and not batch:
             return []
 
-        if slots > 0 and not (tracker is not None and self.queue.priority_blocked):
+        if slots > 0 and not (tracker is not None and self.queue.capacity_blocked):
             batch.update(self.queue.pop_domain_batches(
                 limit=slots,
                 exclude_domain_ids=set(self._domain_pending) | set(batch),

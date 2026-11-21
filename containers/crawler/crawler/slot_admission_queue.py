@@ -1,4 +1,4 @@
-"""Dispatch valuable normal work first when its policy slot has capacity."""
+"""Admit offered work when downloader policy slots have capacity."""
 from collections import Counter
 from contextlib import suppress
 from pathlib import Path
@@ -10,10 +10,10 @@ from .site_policies import SitePolicies
 from .dispatch_defaults import MANUAL_SHARE_PERCENT
 
 
-class ValuePriorityQueue(DownloaderAwarePriorityQueue):
+class SlotAdmissionQueue(DownloaderAwarePriorityQueue):
     """Keep policy-saturated domains out of the downloader waiting room.
 
-    This is a crawler-owned dispatch policy: the offerer provides a value only.
+    URL value and offer ordering belong entirely to the offerer.
     Manual source scheduling and downloader rate/concurrency enforcement remain
     in their existing components. Slot occupancy includes requests waiting in
     middleware, not only those that have reached the network slot.
@@ -122,12 +122,10 @@ class ValuePriorityQueue(DownloaderAwarePriorityQueue):
                 if own_active >= source_cap:
                     continue
             if active < cap:
-                choices.append((head.priority, active, key))
+                choices.append((active, key))
         if not choices:
             return None
-        best_priority = max(item[0] for item in choices)
-        stats = [(active, key) for priority, active, key in choices if priority == best_priority]
-        return super()._next_slot(stats, update_state=False)
+        return super()._next_slot(choices, update_state=False)
 
     def peek(self):
         slot = self._choose()
@@ -149,6 +147,6 @@ class ValuePriorityQueue(DownloaderAwarePriorityQueue):
         return request
 
 
-class ManualValuePriorityQueue(ValuePriorityQueue):
+class ManualSlotAdmissionQueue(SlotAdmissionQueue):
     """The same slot admission boundary for the existing manual source."""
     source = "manual"

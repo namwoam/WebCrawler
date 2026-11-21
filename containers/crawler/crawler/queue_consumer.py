@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import re
-import math
-from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,16 +52,13 @@ class QueueConsumer:
 
     def __init__(self, queue_dir: str):
         self.queue_dir = Path(queue_dir)
-        self.priorities = OrderedDict()
-        self._priority_cache = {}
-        self.priority_blocked = False
+        self._size_cache = {}
+        self.capacity_blocked = False
 
     def _remember_offer(self, entry, data):
-        value = data.get("priority", 0)
-        value = float(value) if isinstance(value, (int, float)) else 0
         urls = data.get("urls")
-        self._priority_cache[entry.domain_id] = (
-            entry.mtime_ns, value if math.isfinite(value) else 0,
+        self._size_cache[entry.domain_id] = (
+            entry.mtime_ns,
             len(urls) if isinstance(urls, list) else 0,
         )
 
@@ -73,7 +68,7 @@ class QueueConsumer:
         exclude_domain_ids: set[int] | None = None,
         include_domain_ids: set[int] | None = None,
         max_urls: int | None = None,
-        priority_only: bool = False,
+        preserve_order: bool = False,
     ) -> dict[int, list[str]]:
         """
         Read up to `limit` domain files (0 = all available).
@@ -81,8 +76,10 @@ class QueueConsumer:
         (left on disk for a future pop).
         Returns {domain_id: [url, ...]}.
         Each consumed file is deleted immediately after reading.
+        preserve_order reserves headroom for the first eligible published offer.
+        URL scores are never interpreted.
         """
-        self.priority_blocked = False
+        self.capacity_blocked = False
         if not self.queue_dir.exists():
             return {}
 
@@ -98,22 +95,7 @@ class QueueConsumer:
             return {}
 
         live_ids = {entry.domain_id for entry in candidates}
-        self._priority_cache = {key: value for key, value in self._priority_cache.items() if key in live_ids}
-        if priority_only:
-            ranked = []
-            for entry in candidates:
-                cached = self._priority_cache.get(entry.domain_id)
-                if cached is None or cached[0] != entry.mtime_ns:
-                    try:
-                        self._remember_offer(entry, read_json(entry.path))
-                        cached = self._priority_cache[entry.domain_id]
-                    except (OSError, ValueError, TypeError, AttributeError):
-                        continue
-                if cached[1] > 0:
-                    ranked.append((cached[1], entry))
-            candidates = [entry for priority, entry in sorted(
-                ranked, key=lambda pair: (-pair[0], pair[1].mtime_ns, pair[1].domain_id))]
-
+        self._size_cache = {key: value for key, value in self._size_cache.items() if key in live_ids}
         # Filter out domains that the caller already has in-flight.
         if exclude_domain_ids:
             candidates = [
@@ -133,12 +115,12 @@ class QueueConsumer:
             p = entry.path
             domain_id = entry.domain_id
 
-            cached = self._priority_cache.get(domain_id)
+            cached = self._size_cache.get(domain_id)
             if (max_urls is not None and cached is not None
-                    and cached[0] == entry.mtime_ns and cached[2] > max_urls):
-                if priority_only:
-                    # Reserve headroom for the most valuable waiting offer.
-                    self.priority_blocked = True
+                    and cached[0] == entry.mtime_ns and cached[1] > max_urls):
+                if preserve_order:
+                    # Reserve headroom for the first eligible published offer.
+                    self.capacity_blocked = True
                     break
                 continue
             try:
@@ -149,8 +131,8 @@ class QueueConsumer:
             self._remember_offer(entry, data)
             if isinstance(urls, list) and max_urls is not None and len(urls) > max_urls:
                 # Leave the whole offer on disk until the consumer has capacity.
-                if priority_only:
-                    self.priority_blocked = True
+                if preserve_order:
+                    self.capacity_blocked = True
                     break
                 continue
             try:
@@ -162,13 +144,7 @@ class QueueConsumer:
                 continue
 
             result[domain_id] = [str(u) for u in urls]
-            self._priority_cache.pop(domain_id, None)
-            value = data.get("priority", 0)
-            self.priorities.pop(domain_id, None)
-            if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
-                self.priorities[domain_id] = min(float(value), 1000)
-            while len(self.priorities) > 2000:
-                self.priorities.popitem(last=False)
+            self._size_cache.pop(domain_id, None)
             if max_urls is not None:
                 max_urls -= len(urls)
 
