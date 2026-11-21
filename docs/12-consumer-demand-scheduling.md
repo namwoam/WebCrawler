@@ -142,6 +142,20 @@ This branch builds on `namwoam:perf/link-processing` (PR #142), using its bounde
 HTML parser process pool and shutdown handling. It does not add a second parser
 pool implementation or change crawler site-policy limits.
 
+`JSON_WRITER_PROCESSES` (environment `CRAWLER_JSON_WRITER_PROCESSES`) accepts
+zero for inline output or one for a spawned output process. One worker preserves
+JSONL append order, with at most two submitted records. Each item remains
+unacknowledged until its write finishes; Scrapy retains backpressure for waiting
+items. Cancellation does not release a running write's permit. Graceful shutdown
+drains accepted writes before joining the process. A broken writer pool stops
+refilling and closes the crawler for Supervisor to restart, as for parser death.
+Both types of worker use the same Linux parent-death cleanup helper. JSONL fields,
+bytes, record order, and the bucket timestamp chosen on pipeline entry remain
+unchanged. The setting defaults to zero. Record pickling still takes work in the
+parent, so the process boundary must be measured rather than assumed faster.
+The independent response buffer is configured with
+`CRAWLER_SCRAPER_SLOT_MAX_ACTIVE_SIZE` in bytes.
+
 The canary logs headers-to-body time, response size, normal parse duration, and
 slot delay/occupancy to distinguish supply starvation from downloader/CPU limits.
 `pre_response_ms` remains a residual; it must not be interpreted as pure queue

@@ -88,6 +88,7 @@ async def run(root):
         "MANUAL_BULK_CRAWL_QUEUE_DIR": str(root / "manual"),
         "OBSLOG_HEARTBEAT_SEC": 0,
         "IPC_TOP_UP_INTERVAL_SEC": 0,
+        "JSON_WRITER_PROCESSES": 1,
         "ROBOTSTXT_OBEY": False,
         "DOWNLOADER_MIDDLEWARES": {},
         "SPIDER_MIDDLEWARES": {},
